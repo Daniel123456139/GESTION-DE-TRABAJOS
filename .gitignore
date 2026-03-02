@@ -1,0 +1,57 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Outputs y logs
+output*.txt
+tsc_output*.txt
+*.log
+
+# Archivos locales
+*.local
+.env.local
+
+# Archivos temporales
+*_temp.*
+*_old.*
+*_backup.*
+
+
+# Secretos y Entorno
+.env
+
+# Documentación sensible
+docs/*.xlsx
+
+# Scripts de reproducción y tests temporales
+repro_*
+test_*
+scripts/test-*
+
+# Archivos de informes y zips temporales
+*.zip
+unpacked_*/
+PRESENCIA_JUSTIFICACION_ID.md
+PRESENCIA_TECHNICAL_REPORT.md
+PRESENCIA_USER_MANUAL.md
