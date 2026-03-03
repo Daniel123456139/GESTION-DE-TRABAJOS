@@ -293,48 +293,188 @@ const addAnalysisSheet = (
     data: DepartmentGroup[]
 ) => {
     const worksheet = workbook.addWorksheet('ANALISIS', {
-        views: [{ state: 'frozen', ySplit: 1, xSplit: 0 }]
+        views: [{ state: 'frozen', ySplit: 6, xSplit: 0 }]
     });
 
-    worksheet.columns = [
-        { header: 'SECCION', key: 'seccion', width: 25 },
-        { header: 'OPERARIO', key: 'operario', width: 15 },
-        { header: 'NOMBRE', key: 'nombre', width: 35 },
-        { header: 'PRODUCTIVO ERP', key: 'productivo', width: 20 },
-        { header: 'TOTAL HORAS', key: 'total', width: 15 },
-        { header: 'IMPRODUCTIVAS', key: 'improd', width: 15 },
-        { header: '% IMPROD', key: 'percent', width: 15 }
-    ];
-
-    const headerRow = worksheet.getRow(1);
-    headerRow.font = { bold: true };
-    headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEEEEEE' } };
+    // 1. Calcular totales globales
+    let totalEmployees = 0;
+    let totalHoursAll = 0;
+    let totalImprodAll = 0;
 
     data.forEach(group => {
         group.rows.forEach(emp => {
-            const row = worksheet.addRow({
-                seccion: group.departmentName,
-                operario: emp.operatorId,
-                nombre: emp.operatorName,
-                productivo: emp.isProductive ? 'SI' : 'NO',
-                total: emp.totalHours,
-                improd: emp.improductiveHours,
-                percent: emp.totalHours > 0 ? emp.improductiveHours / emp.totalHours : 0
-            });
-            
-            row.getCell('productivo').font = { 
-                color: { argb: emp.isProductive ? 'FF000000' : 'FF9C0006' },
-                bold: !emp.isProductive
-            };
-            row.getCell('percent').numFmt = '0.00%';
-            row.getCell('total').numFmt = '0.00';
-            row.getCell('improd').numFmt = '0.00';
-            
-            if (!emp.isProductive) {
-                row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFC7CE' } };
-            }
+            totalEmployees++;
+            totalHoursAll += emp.totalHours;
+            totalImprodAll += emp.improductiveHours;
         });
     });
+
+    const averageImprod = totalHoursAll > 0 ? (totalImprodAll / totalHoursAll) : 0;
+
+    // 2. Dashboard Superior (Filas 1 a 4)
+    worksheet.mergeCells('B2:C2');
+    worksheet.mergeCells('B3:C3');
+    worksheet.mergeCells('D2:E2');
+    worksheet.mergeCells('D3:E3');
+    worksheet.mergeCells('F2:G2');
+    worksheet.mergeCells('F3:G3');
+
+    const titleRow = worksheet.getRow(2);
+    titleRow.getCell('B').value = 'TOTAL EMPLEADOS';
+    titleRow.getCell('D').value = 'TOTAL HORAS';
+    titleRow.getCell('F').value = '% IMPROD GLOBAL';
+
+    const valueRow = worksheet.getRow(3);
+    valueRow.getCell('B').value = totalEmployees;
+    valueRow.getCell('D').value = Number(totalHoursAll.toFixed(2));
+    valueRow.getCell('F').value = Number(averageImprod.toFixed(4));
+    valueRow.getCell('F').numFmt = '0.00%';
+
+    // Estilos Dashboard
+    ['B', 'D', 'F'].forEach(col => {
+        const titleCell = titleRow.getCell(col);
+        titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E78' } };
+        titleCell.font = { color: { argb: 'FFFFFFFF' }, bold: true, size: 11 };
+        titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+        titleCell.border = { top: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } };
+
+        const valCell = valueRow.getCell(col);
+        valCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDDEBF7' } };
+        valCell.font = { bold: true, size: 14, color: { argb: 'FF1F4E78' } };
+        valCell.alignment = { horizontal: 'center', vertical: 'middle' };
+        valCell.border = { bottom: { style: 'thin' }, left: { style: 'thin' }, right: { style: 'thin' } };
+    });
+
+    titleRow.height = 20;
+    valueRow.height = 30;
+
+    // 3. Cabecera de la tabla (Fila 6)
+    worksheet.getRow(6).values = [
+        'SECCION', 'OPERARIO', 'NOMBRE', 'PRODUCTIVO ERP', 'TOTAL HORAS', 'IMPRODUCTIVAS', '% IMPROD'
+    ];
+
+    worksheet.columns = [
+        { key: 'seccion', width: 25 },
+        { key: 'operario', width: 15 },
+        { key: 'nombre', width: 35 },
+        { key: 'productivo', width: 20 },
+        { key: 'total', width: 15 },
+        { key: 'improd', width: 15 },
+        { key: 'percent', width: 15 }
+    ];
+
+    const headerRow = worksheet.getRow(6);
+    headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 11 };
+    headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4F81BD' } };
+    headerRow.alignment = { horizontal: 'center', vertical: 'middle' };
+    headerRow.height = 25;
+
+    // Auto filtro
+    worksheet.autoFilter = 'A6:G6';
+
+    // 4. Llenar Datos (A partir de la fila 7)
+    let currentRowIndex = 7;
+
+    data.forEach(group => {
+        // Ordenar empleados por % de improductividad (descendente) dentro de cada sección
+        const sortedRows = [...group.rows].sort((a, b) => {
+            const percA = a.totalHours > 0 ? a.improductiveHours / a.totalHours : 0;
+            const percB = b.totalHours > 0 ? b.improductiveHours / b.totalHours : 0;
+            return percB - percA;
+        });
+
+        sortedRows.forEach(emp => {
+            const row = worksheet.getRow(currentRowIndex);
+
+            const isProductive = emp.isProductive;
+            const percent = emp.totalHours > 0 ? emp.improductiveHours / emp.totalHours : 0;
+
+            row.getCell('A').value = group.departmentName;
+            row.getCell('B').value = emp.operatorId;
+            row.getCell('C').value = emp.operatorName;
+            row.getCell('D').value = isProductive ? 'SI' : 'NO';
+            row.getCell('E').value = emp.totalHours;
+            row.getCell('F').value = emp.improductiveHours;
+            row.getCell('G').value = percent;
+
+            // Formatos de celda
+            row.getCell('D').font = {
+                color: { argb: isProductive ? 'FF000000' : 'FF9C0006' },
+                bold: !isProductive
+            };
+            row.getCell('E').numFmt = '0.00';
+            row.getCell('F').numFmt = '0.00';
+            row.getCell('G').numFmt = '0.00%';
+
+            row.alignment = { vertical: 'middle' };
+
+            // Zebra striping para lectura amigable
+            if (currentRowIndex % 2 === 0) {
+                row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF9F9F9' } };
+            }
+
+            // Destacar celda de NO Productivo
+            if (!isProductive) {
+                row.getCell('D').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFC7CE' } };
+            }
+
+            currentRowIndex++;
+        });
+    });
+
+    const lastRowIndex = currentRowIndex > 7 ? currentRowIndex - 1 : 7;
+
+    // 5. Formato Condicional (Data Bars y Color Scales)
+    if (lastRowIndex >= 7) {
+        // Data Bars para % IMPROD (Columna G)
+        worksheet.addConditionalFormatting({
+            ref: `G7:G${lastRowIndex}`,
+            rules: [
+                {
+                    type: 'dataBar',
+                    priority: 1,
+                    cfvo: [{ type: 'min' }, { type: 'max' }],
+                    color: { argb: 'FF5B9BD5' } // Azul corporativo
+                } as any
+            ]
+        });
+
+        // Color scale para IMPRODUCTIVAS (Columna F)
+        worksheet.addConditionalFormatting({
+            ref: `F7:F${lastRowIndex}`,
+            rules: [
+                {
+                    type: 'colorScale',
+                    priority: 2,
+                    cfvo: [
+                        { type: 'min' },
+                        { type: 'percentile', value: 50 },
+                        { type: 'max' }
+                    ],
+                    color: [
+                        { argb: 'FF63BE7B' }, // Verde (bajo)
+                        { argb: 'FFFFEB84' }, // Amarillo (medio)
+                        { argb: 'FFF8696B' }  // Rojo (alto)
+                    ]
+                }
+            ]
+        });
+    }
+
+    // 6. Bordes para toda la tabla de datos
+    for (let r = 6; r <= lastRowIndex; r++) {
+        const row = worksheet.getRow(r);
+        row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+            if (colNumber <= 7) {
+                cell.border = {
+                    top: { style: 'thin', color: { argb: 'FFD9D9D9' } },
+                    left: { style: 'thin', color: { argb: 'FFD9D9D9' } },
+                    bottom: { style: 'thin', color: { argb: 'FFD9D9D9' } },
+                    right: { style: 'thin', color: { argb: 'FFD9D9D9' } }
+                };
+            }
+        });
+    }
 };
 
 export const generateImproductivosExcel = async (

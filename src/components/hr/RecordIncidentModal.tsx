@@ -228,7 +228,7 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({
 
     useEffect(() => {
         // Reset only when opening
-                        if (isOpen && !prevIsOpenRef.current) {
+        if (isOpen && !prevIsOpenRef.current) {
             if (incidents.length > 0) {
                 setSelectedIncidentKey(incidents[0].key);
             } else if (registerScope === 'allAbsentDays') {
@@ -350,12 +350,12 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({
 
         // Log warnings but don't block
         if (warnings.length > 0) {
-            logWarning('⚠️ [VALIDATION] Warnings (no bloquean):', warnings);
+            logWarning('⚠️ [VALIDATION] Warnings (no bloquean):', { warnings });
         }
 
         // Only block if there are actual errors
         if (errors.length > 0) {
-            logError('❌ [VALIDATION] Errors found - blocking submission:', errors);
+            logError('❌ [VALIDATION] Errors found - blocking submission:', { errors });
             setValidationIssues(errors);
             setIsValidationModalOpen(true);
             return;

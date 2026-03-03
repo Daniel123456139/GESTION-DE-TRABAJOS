@@ -167,7 +167,7 @@ export function useProcessDataWorker(
                 const handleError = (err: Event) => {
                     if (CurrentToken !== processingTokenRef.current) return;
                     cleanupWorker(true);
-                    logError("Worker Error:", err);
+                    logError("Worker Error:", { name: err.type, timeStamp: err.timeStamp });
                     runSynchronousFallback();
                 };
 

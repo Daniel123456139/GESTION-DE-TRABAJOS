@@ -128,7 +128,7 @@ export const updateCalendarioOperario = async (
 
     if (!response.ok) {
         const errorText = await response.text();
-        logError('❌ [API] updateCalendarioOperario - ERROR:', response.status, errorText);
+        logError('❌ [API] updateCalendarioOperario - ERROR:', { status: response.status, errorText });
         throw new Error(`Error actualizando calendario (${response.status}): ${errorText}`);
     }
 
