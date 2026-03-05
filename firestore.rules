@@ -54,6 +54,10 @@ service cloud.firestore {
         'hr', 'HR', 'admin', 'ADMIN', 'RRHH', 'SUPER_ADMIN', 'super_admin'
       ]);
     }
+
+    function hasAdminRole() {
+      return hasAnyRole(['admin', 'ADMIN', 'SUPER_ADMIN', 'super_admin']);
+    }
     
     /**
      * Validar que no se incluyan campos PII prohibidos
@@ -69,6 +73,33 @@ service cloud.firestore {
              !('telefono' in data) &&
              !('email_personal' in data);
     }
+
+    function validGeneratedPunchPayload() {
+      let data = request.resource.data;
+      return data.keys().hasOnly([
+        'employeeId',
+        'date',
+        'time',
+        'reasonId',
+        'reasonDesc',
+        'direction',
+        'originalTime',
+        'timeKey',
+        'createdAt',
+        'type'
+      ]) &&
+      data.employeeId is string &&
+      data.employeeId.size() > 0 && data.employeeId.size() <= 6 &&
+      data.date is string && data.date.matches('^\\d{4}-\\d{2}-\\d{2}$') &&
+      data.time is string && data.time.matches('^\\d{2}:\\d{2}(:\\d{2})?$') &&
+      (!('originalTime' in data) || (data.originalTime is string && data.originalTime.matches('^\\d{2}:\\d{2}(:\\d{2})?$'))) &&
+      (!('timeKey' in data) || (data.timeKey is string && data.timeKey.matches('^\\d{2}:\\d{2}$'))) &&
+      (!('reasonId' in data) || data.reasonId == null || data.reasonId is int) &&
+      data.reasonDesc is string && data.reasonDesc.size() <= 120 &&
+      data.direction in ['Entrada', 'Salida'] &&
+      (!('type' in data) || data.type == 'synthetic_punch') &&
+      (!('createdAt' in data) || data.createdAt is timestamp);
+    }
     
     // ═══════════════════════════════════════════════════════════════
     // COLECCIÓN: USUARIOS / usuarios (Perfiles de login)
@@ -79,12 +110,12 @@ service cloud.firestore {
       allow read: if isAuthenticated() && (request.auth.uid == userId || hasHrOrAdminRole());
 
       // Solo Admin puede crear/editar usuarios
-      allow create, update, delete: if hasHrOrAdminRole();
+      allow create, update, delete: if hasAdminRole();
     }
 
     match /usuarios/{userId} {
       allow read: if isAuthenticated() && (request.auth.uid == userId || hasHrOrAdminRole());
-      allow create, update, delete: if hasHrOrAdminRole();
+      allow create, update, delete: if hasAdminRole();
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -194,9 +225,9 @@ service cloud.firestore {
     // ═══════════════════════════════════════════════════════════════
     
     match /BAJAS/{bajaId} {
-      // Lectura: HR y Admin (DEBUG: Relaxed to isAuthenticated for troubleshooting)
-      allow read: if isAuthenticated(); // hasAnyRole(['hr', 'admin']);
-      
+      // Lectura: HR y Admin
+      allow read: if hasHrOrAdminRole();
+
       // Escritura: Solo HR y Admin (para mover de activa a historico)
       allow write: if hasHrOrAdminRole();
     }
@@ -221,9 +252,9 @@ service cloud.firestore {
     // ═══════════════════════════════════════════════════════════════
     
     match /BAJAS_METADATA/{metadataId} {
-      // Lectura: Cualquier usuario autenticado (incluyendo anónimos)
-      allow read: if isAuthenticated(); // hasAnyRole(['hr', 'admin']);
-      
+      // Lectura: Solo HR y Admin
+      allow read: if hasHrOrAdminRole();
+
       // Escritura: Solo HR y Admin
       allow write: if hasHrOrAdminRole();
     }
@@ -233,8 +264,12 @@ service cloud.firestore {
     // ═══════════════════════════════════════════════════════════════
     
     match /APP_GENERATED_PUNCHES/{punchId} {
-      // Lectura y Escritura: Cualquier usuario autenticado (incluyendo anónimos)
-      allow read, write: if isAuthenticated();
+      // Lectura: Solo HR/Admin por trazabilidad y protección de integridad
+      allow read: if hasHrOrAdminRole();
+
+      // Escritura: Solo HR/Admin con validación de payload
+      allow create, update: if hasHrOrAdminRole() && validGeneratedPunchPayload();
+      allow delete: if hasHrOrAdminRole();
     }
     
     // ═══════════════════════════════════════════════════════════════

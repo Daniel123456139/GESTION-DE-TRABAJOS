@@ -2,6 +2,7 @@
 import { RawDataRow } from '../types';
 import { normalizeDateKey, extractTimeHHMM, extractTimeHHMMSS } from '../utils/datetime';
 import { getApiBaseUrl, getErpUsername } from '../config/apiConfig';
+import { getCurrentFirebaseToken } from './firebaseAuthService';
 import { logError, logWarning } from '../utils/logger';
 
 // Convierte YYYY-MM-DD a DD/MM/YYYY para compatibilidad estricta con ERP
@@ -103,13 +104,40 @@ const hasRecognizedEntradaFlag = (value: unknown): boolean => {
     return false;
 };
 
+const ENTRADA_ANOMALY_WARN_COOLDOWN_MS = 60000;
+let lastEntradaAnomalyWarningAt = 0;
+
+const shouldAttachProxyToken = (url: string): boolean => {
+    if (!url) return false;
+    if (url.startsWith('/api/erp')) return true;
+    try {
+        const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost';
+        const parsed = new URL(url, origin);
+        if (typeof window !== 'undefined' && parsed.origin !== window.location.origin) {
+            return false;
+        }
+        return parsed.pathname.startsWith('/api/erp');
+    } catch {
+        return false;
+    }
+};
+
 // Helper con Timeout para evitar bloqueos
 const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeout = 15000) => {
     const controller = new AbortController();
     const id = setTimeout(() => controller.abort(), timeout);
     try {
+        const headers = new Headers(options.headers || {});
+        if (shouldAttachProxyToken(url) && options.mode !== 'no-cors') {
+            const token = await getCurrentFirebaseToken();
+            if (token && !headers.has('Authorization')) {
+                headers.set('Authorization', `Bearer ${token}`);
+            }
+        }
+
         const response = await fetch(url, {
             ...options,
+            headers,
             signal: controller.signal
         });
         clearTimeout(id);
@@ -122,8 +150,10 @@ const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeout 
 
 export const checkConnection = async (): Promise<boolean> => {
     try {
-        await fetchWithTimeout(`${getApiBaseUrl()}/docs`, {
-            mode: 'no-cors',
+        const endpoint = `${getApiBaseUrl()}/docs`;
+        const mode: RequestMode = shouldAttachProxyToken(endpoint) ? 'same-origin' : 'no-cors';
+        await fetchWithTimeout(endpoint, {
+            mode,
             method: 'GET',
             cache: 'no-store'
         }, 3000);
@@ -272,6 +302,8 @@ export const fetchFichajes = async (
             throw new Error(`Error del servidor (${lastStatus || 422})`);
         }
 
+        let explicitEntradaCount = 0;
+        let recognizedEntradaCount = 0;
 
         const mappedData = data.map((item: any) => {
             const motivoRaw = item.MotivoAusencia;
@@ -283,6 +315,12 @@ export const fetchFichajes = async (
             const hasExplicitEntrada = rawEntrada !== null && rawEntrada !== undefined && String(rawEntrada).trim() !== '';
             const hasRecognizedEntrada = hasRecognizedEntradaFlag(rawEntrada);
             const parsedEntrada = parseEntradaFlag(rawEntrada);
+
+            if (hasExplicitEntrada) {
+                explicitEntradaCount++;
+                if (hasRecognizedEntrada) recognizedEntradaCount++;
+            }
+
             const descMotivo = item.DescMotivoAusencia || item.DescMotivo || '';
             const normalizedHora = extractTimeHHMMSS(formatApiTimeToApp(item.Hora));
 
@@ -348,7 +386,22 @@ export const fetchFichajes = async (
                     });
                 });
 
-                logWarning('[FICHAJES] Entrada flag anomalo detectado; secuencia reconstruida por empleado-dia.');
+                const hasReliableEntradaSample = explicitEntradaCount > 0
+                    && (recognizedEntradaCount / explicitEntradaCount) >= 0.6;
+
+                if (hasReliableEntradaSample) {
+                    const now = Date.now();
+                    if ((now - lastEntradaAnomalyWarningAt) >= ENTRADA_ANOMALY_WARN_COOLDOWN_MS) {
+                        lastEntradaAnomalyWarningAt = now;
+                        logWarning('[FICHAJES] Entrada flag anomalo detectado; secuencia reconstruida por empleado-dia.', {
+                            source: 'apiService.fetchFichajes',
+                            entryRatio: Number(entryRatio.toFixed(2)),
+                            normalPunches: normalPunches.length,
+                            recognizedEntradaCount,
+                            explicitEntradaCount
+                        });
+                    }
+                }
             }
         }
 

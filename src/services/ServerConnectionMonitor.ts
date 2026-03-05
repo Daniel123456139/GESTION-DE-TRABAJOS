@@ -1,6 +1,7 @@
 
 import { getApiBaseUrl } from '../config/apiConfig';
-import { logError, logWarning } from '../utils/logger';
+import { getCurrentFirebaseToken } from './firebaseAuthService';
+import { logInfo, logWarning } from '../utils/logger';
 
 export type ServerStatus = 'online' | 'offline' | 'connecting';
 
@@ -10,6 +11,22 @@ const BASE_INTERVAL_MS = 15000; // 15 segundos en estado normal
 const MIN_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 30000;
 const FETCH_TIMEOUT_MS = 5000; // Timeout estricto para el ping
+const PING_TIMEOUT_WARN_COOLDOWN_MS = 60000;
+
+const shouldAttachProxyToken = (url: string): boolean => {
+    if (!url) return false;
+    if (url.startsWith('/api/erp')) return true;
+    try {
+        const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost';
+        const parsed = new URL(url, origin);
+        if (typeof window !== 'undefined' && parsed.origin !== window.location.origin) {
+            return false;
+        }
+        return parsed.pathname.startsWith('/api/erp');
+    } catch {
+        return false;
+    }
+};
 
 class ServerConnectionMonitorService {
     private status: ServerStatus = 'connecting';
@@ -17,6 +34,7 @@ class ServerConnectionMonitorService {
     private listeners: StatusListener[] = [];
     private timerId: any = null;
     private abortController: AbortController | null = null;
+    private lastPingTimeoutWarningAt = 0;
     
     // Control de Backoff
     private retryCount = 0;
@@ -26,7 +44,9 @@ class ServerConnectionMonitorService {
         // Escuchar cambios en la configuración de la API para reiniciar chequeo inmediatamente
         if (typeof window !== 'undefined') {
             window.addEventListener('apiBaseUrlChanged', () => {
-                console.log("API URL Changed detected by Monitor. Restarting check...");
+                logInfo('API URL changed detected by monitor. Restarting check.', {
+                    source: 'ServerConnectionMonitor.constructor'
+                });
                 this.forceCheck();
             });
         }
@@ -99,23 +119,35 @@ class ServerConnectionMonitorService {
         if (!this.isRunning) return;
 
         if (this.abortController) this.abortController.abort();
-        this.abortController = new AbortController();
+        const currentController = new AbortController();
+        this.abortController = currentController;
+        let abortedByTimeout = false;
 
         // Timeout de seguridad para el ping
         const timeoutId = setTimeout(() => {
-            if (this.abortController) this.abortController.abort();
+            abortedByTimeout = true;
+            currentController.abort();
         }, FETCH_TIMEOUT_MS);
 
         const startTime = Date.now();
         const baseUrl = getApiBaseUrl();
         const checkEndpoint = `${baseUrl}/docs`; // Asumiendo endpoint docs o root
+        const shouldAttachToken = shouldAttachProxyToken(checkEndpoint);
+        const token = shouldAttachToken
+            ? await getCurrentFirebaseToken()
+            : null;
+        const headers: HeadersInit | undefined = token
+            ? { Authorization: `Bearer ${token}` }
+            : undefined;
+        const mode: RequestMode = shouldAttachToken ? 'same-origin' : 'no-cors';
 
         try {
             // Intentamos un fetch simple GET
             await fetch(checkEndpoint, {
                 method: 'GET',
-                mode: 'no-cors', // Importante para evitar bloqueos CORS en el ping
-                signal: this.abortController.signal,
+                mode,
+                signal: currentController.signal,
+                headers,
                 cache: 'no-store'
             });
 
@@ -139,9 +171,21 @@ class ServerConnectionMonitorService {
 
         } catch (error: any) {
             clearTimeout(timeoutId);
-            if (error.name === 'AbortError') {
-                // Timeout del fetch propio
-                logWarning("Connection Monitor: Ping timeout");
+            if (error?.name === 'AbortError' && !abortedByTimeout) {
+                // Abort intencional (stop/forceCheck/solape de chequeos): no contaminar estado ni logs.
+                return;
+            }
+
+            if (error?.name === 'AbortError' && abortedByTimeout) {
+                const now = Date.now();
+                if ((now - this.lastPingTimeoutWarningAt) >= PING_TIMEOUT_WARN_COOLDOWN_MS) {
+                    this.lastPingTimeoutWarningAt = now;
+                    logWarning("Connection Monitor: Ping timeout", {
+                        source: 'ServerConnectionMonitor.checkConnection',
+                        endpoint: checkEndpoint,
+                        timeoutMs: FETCH_TIMEOUT_MS
+                    });
+                }
             }
 
             const wasOnline = this.status === 'online';

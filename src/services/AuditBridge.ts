@@ -1,6 +1,7 @@
 
 import { SyncService } from './syncService';
 import { AuditService } from './AuditService';
+import { logInfo } from '../utils/logger';
 
 let isInitialized = false;
 
@@ -9,7 +10,9 @@ export const AuditBridge = {
         if (isInitialized) return;
         isInitialized = true;
 
-        console.log("🔒 AuditBridge Initialized: Listening to System Events");
+        logInfo('AuditBridge initialized: listening to system events', {
+            source: 'AuditBridge.init'
+        });
 
         // Suscribirse a eventos del SyncService
         SyncService.subscribe((event) => {

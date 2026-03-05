@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { fetchFichajes, fetchFichajesBatched } from '../services/apiService';
 import { RawDataRow } from '../types';
-import { logError, logWarning } from '../utils/logger';
+import { logError, logInfo, logWarning } from '../utils/logger';
 
 interface AutoRefreshOptions {
     intervalMs?: number; // Default 120000 (2 mins)
@@ -24,7 +24,7 @@ export const useAutoRefresh = (
     const refreshData = useCallback(async () => {
         if (!startDate || !endDate) return;
 
-        console.log('🔄 [AutoRefresh] Iniciando sincronización...');
+        logInfo('[AutoRefresh] Iniciando sincronizacion', { source: 'useAutoRefresh.refreshData' });
         setIsRefetching(true);
         setError(null);
 
@@ -36,7 +36,7 @@ export const useAutoRefresh = (
                 : await fetchFichajes(startDate, endDate, '', '00:00', '23:59');
             onDataFetched(data);
             setLastUpdated(Date.now());
-            console.log('✅ [AutoRefresh] Sincronización completada.');
+            logInfo('[AutoRefresh] Sincronizacion completada', { source: 'useAutoRefresh.refreshData' });
         } catch (err: any) {
             logError('❌ [AutoRefresh] Error:', err);
             setError(err.message || 'Error de conexión');
@@ -74,7 +74,7 @@ export const useAutoRefresh = (
                 // Si ha pasado más de 10 segs desde la última vez (para evitar rebote rápido)
                 const timeSinceLast = Date.now() - lastUpdated;
                 if (timeSinceLast > 10000) {
-                    console.log('👁️ [AutoRefresh] Pestaña visible, forzando refresh...');
+                    logInfo('[AutoRefresh] Pestana visible, forzando refresh', { source: 'useAutoRefresh.visibilityChange' });
                     refreshData();
                 }
             }

@@ -177,18 +177,6 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({
             })
             .filter((item): item is IncidentToJustify => item !== null);
 
-        // 🔍 DEBUG: Log para empleado 047 (VELAZQUEZ MARTIN, MARIO)
-        if (employeeData?.operario === 47) {
-            console.log('🔍 DEBUG empleado 047 (VELAZQUEZ MARTIN):', {
-                absentDays: employeeData.absentDays,
-                unjustifiedGaps: employeeData.unjustifiedGaps,
-                workdayDeviations: employeeData.workdayDeviations,
-                totalIncidents: [...gapIncidents, ...absentIncidents].length,
-                gapCount: gapIncidents.length,
-                absentCount: absentIncidents.length
-            });
-        }
-
         const combined = [...gapIncidents, ...workdayIncidents, ...absentIncidents];
         if (combined.length === 0 && employeeData.operario) {
             logWarning('⚠️ RecordIncidentModal: No incidents found.', {

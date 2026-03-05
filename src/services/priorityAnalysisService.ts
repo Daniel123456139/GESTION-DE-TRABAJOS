@@ -10,7 +10,7 @@
  */
 
 import { differenceInCalendarDays, parseISO } from 'date-fns';
-import { logError, logWarning } from '../utils/logger';
+import { logError, logInfo, logWarning } from '../utils/logger';
 import {
     JobControlEntry,
     PriorityArticle,
@@ -80,20 +80,29 @@ export function analyzeEmployeeWorks(
     });
 
     if (DEBUG_MODE) {
-        console.log('\n🎯 [Priority Analysis] Iniciando análisis con MATCHING DOBLE (Artículo + OF)');
-        console.log(`📊 [Priority Analysis] Artículos en mapa EXACTO: ${priorityMap.size}`);
-        console.log(`📊 [Priority Analysis] Artículos en mapa FUZZY: ${fuzzyPriorityMap.size}`);
-        console.log(`👥 [Priority Analysis] Empleados a analizar: ${Object.keys(jobData).length}`);
-        console.log(`📅 [Priority Analysis] Fecha de análisis: ${analysisDate.toISOString().split('T')[0]}`);
+        logInfo('[Priority Analysis] Iniciando analisis con matching doble (Articulo + OF)', {
+            source: 'priorityAnalysisService.analyzeEmployeeWorks',
+            exactPriorityCount: priorityMap.size,
+            fuzzyPriorityCount: fuzzyPriorityMap.size,
+            employeeCount: Object.keys(jobData).length,
+            analysisDate: analysisDate.toISOString().split('T')[0]
+        });
     }
 
-    // SIEMPRE mostrar primeros trabajos ERP para diagnóstico
+    // Mostrar primeros trabajos ERP solo en debug
     const primerEmpleadoId = Object.keys(jobData)[0];
     const primerosTrabajos = jobData[primerEmpleadoId]?.slice(0, 10) || [];
-    console.log(`\n🏭 PRIMEROS 10 TRABAJOS DEL ERP (IDArticulo + NOrden):`);
-    primerosTrabajos.forEach((job, idx) => {
-        console.log(`   ${idx + 1}. Artículo: \"${job.IDArticulo}\" | OF: \"${job.NOrden}\" - ${job.DescOperacion}`);
-    });
+    if (DEBUG_MODE && primerosTrabajos.length > 0) {
+        logInfo('[Priority Analysis] Muestra de primeros trabajos ERP', {
+            source: 'priorityAnalysisService.analyzeEmployeeWorks',
+            sample: primerosTrabajos.map((job, idx) => ({
+                index: idx + 1,
+                article: job.IDArticulo,
+                order: job.NOrden,
+                operation: job.DescOperacion
+            }))
+        });
+    }
 
     // Procesar cada empleado
     for (const [employeeId, jobs] of Object.entries(jobData)) {
@@ -126,7 +135,11 @@ export function analyzeEmployeeWorks(
             if (!priorityInfo && exactOF && fuzzyArticle.length > 2 && fuzzyOF.length > 3) {
                 priorityInfo = fuzzyPriorityMap.get(fuzzyKey);
                 if (priorityInfo && DEBUG_MODE) {
-                    console.log(`✨ [Fuzzy Match] ERP: \"${exactArticle}|${exactOF}\" ↔ Excel: \"${priorityInfo.articulo}|${priorityInfo.lanz}\"`);
+                    logInfo('[Priority Analysis] Fuzzy match detectado', {
+                        source: 'priorityAnalysisService.analyzeEmployeeWorks',
+                        erpKey: `${exactArticle}|${exactOF}`,
+                        excelKey: `${priorityInfo.articulo}|${priorityInfo.lanz}`
+                    });
                 }
             }
 
@@ -150,12 +163,20 @@ export function analyzeEmployeeWorks(
             if (priorityInfo) {
                 matchesEncontrados++;
                 if (DEBUG_MODE && matchesEncontrados <= 5) {
-                    console.log(`✅ [Match] ERP: Artículo=\"${exactArticle}\" OF=\"${exactOF}\" ↔ Excel encontrado`);
+                    logInfo('[Priority Analysis] Match exacto', {
+                        source: 'priorityAnalysisService.analyzeEmployeeWorks',
+                        article: exactArticle,
+                        order: exactOF
+                    });
                 }
             } else {
                 trabajosSinMatch++;
                 if (DEBUG_MODE && trabajosSinMatch <= 10) {
-                    console.log(`⚠️ [No Match] ERP: Artículo=\"${exactArticle}\" OF=\"${exactOF}\" ❌ No encontrado en Excel`);
+                    logInfo('[Priority Analysis] Sin match en Excel', {
+                        source: 'priorityAnalysisService.analyzeEmployeeWorks',
+                        article: exactArticle,
+                        order: exactOF
+                    });
                 }
                 return; // Sin match en Excel, no se clasifica
             }
@@ -202,12 +223,17 @@ export function analyzeEmployeeWorks(
         const analysis = aggregateByEmployee(employeeId, employeeName, employeeShift, trabajosDetalle);
 
         if (DEBUG_MODE && trabajosDetalle.length > 0) {
-            console.log(`\n👤 [Priority Analysis] Empleado: ${employeeName}`);
-            console.log(`   - Trabajos procesados: ${jobs.length}`);
-            console.log(`   - Matches encontrados: ${matchesEncontrados}`);
-            console.log(`   - Sin match: ${trabajosSinMatch}`);
-            console.log(`   - Urgentes: ${analysis.trabajosUrgentes} (${analysis.horasUrgentes.toFixed(1)}h)`);
-            console.log(`   - No urgentes: ${analysis.trabajosNoUrgentes} (${analysis.horasNoUrgentes.toFixed(1)}h)`);
+            logInfo('[Priority Analysis] Resumen por empleado', {
+                source: 'priorityAnalysisService.analyzeEmployeeWorks',
+                employee: employeeName,
+                totalJobs: jobs.length,
+                matchesEncontrados,
+                trabajosSinMatch,
+                trabajosUrgentes: analysis.trabajosUrgentes,
+                horasUrgentes: Number(analysis.horasUrgentes.toFixed(1)),
+                trabajosNoUrgentes: analysis.trabajosNoUrgentes,
+                horasNoUrgentes: Number(analysis.horasNoUrgentes.toFixed(1))
+            });
         }
 
         if (analysis.trabajosUrgentes > 0 || analysis.trabajosNoUrgentes > 0) {
@@ -216,9 +242,11 @@ export function analyzeEmployeeWorks(
     }
 
     if (DEBUG_MODE) {
-        console.log(`\n✅ [Priority Analysis] Análisis completado`);
-        console.log(`   - Empleados con datos: ${employeeAnalyses.length}`);
-        console.log(`   - Total trabajos analizados: ${employeeAnalyses.reduce((sum, e) => sum + e.trabajosUrgentes + e.trabajosNoUrgentes, 0)}`);
+        logInfo('[Priority Analysis] Analisis completado', {
+            source: 'priorityAnalysisService.analyzeEmployeeWorks',
+            employeesWithData: employeeAnalyses.length,
+            totalJobsAnalyzed: employeeAnalyses.reduce((sum, e) => sum + e.trabajosUrgentes + e.trabajosNoUrgentes, 0)
+        });
     }
 
     return employeeAnalyses;

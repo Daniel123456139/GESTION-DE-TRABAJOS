@@ -46,6 +46,10 @@ export const getApiBaseUrl = (): string => {
 export const setApiBaseUrl = (url: string) => {
     try {
         const isProd = typeof import.meta !== 'undefined' && !!import.meta.env && import.meta.env.PROD;
+        if (isProd) {
+            logWarning('Bloqueado setApiBaseUrl en produccion', { source: 'apiConfig.setApiBaseUrl' });
+            return;
+        }
         let cleanUrl = url.trim();
         // Quitar barra final si existe
         if (cleanUrl.endsWith('/')) {
@@ -70,6 +74,11 @@ export const setApiBaseUrl = (url: string) => {
 
 export const clearApiBaseUrl = () => {
     try {
+        const isProd = typeof import.meta !== 'undefined' && !!import.meta.env && import.meta.env.PROD;
+        if (isProd) {
+            logWarning('Bloqueado clearApiBaseUrl en produccion', { source: 'apiConfig.clearApiBaseUrl' });
+            return;
+        }
         localStorage.removeItem('apiBaseUrl');
         window.dispatchEvent(new Event('apiBaseUrlChanged'));
     } catch (e) {
@@ -78,11 +87,18 @@ export const clearApiBaseUrl = () => {
 };
 
 // --- Configuración del Usuario ERP (dominio\usuario) ---
-// Ejemplo correcto del API: "favram\a.obregon" (una sola barra invertida)
-const DEFAULT_ERP_USERNAME = 'favram\\facturas';
+const DEFAULT_ERP_USERNAME = String(
+    (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_ERP_USERNAME)
+        ? import.meta.env.VITE_ERP_USERNAME
+        : 'AppUser'
+).trim().replace(/\\\\/g, '\\');
 
 export const getErpUsername = (): string => {
     try {
+        const isProd = typeof import.meta !== 'undefined' && !!import.meta.env && import.meta.env.PROD;
+        if (isProd) {
+            return DEFAULT_ERP_USERNAME;
+        }
         const stored = localStorage.getItem('erpUsername');
         if (stored) {
             // Normalizar: si el usuario escribió doble barra, convertir a simple
@@ -96,8 +112,17 @@ export const getErpUsername = (): string => {
 
 export const setErpUsername = (username: string) => {
     try {
+        const isProd = typeof import.meta !== 'undefined' && !!import.meta.env && import.meta.env.PROD;
+        if (isProd) {
+            logWarning('Bloqueado setErpUsername en produccion', { source: 'apiConfig.setErpUsername' });
+            return;
+        }
         // Normalizar: convertir doble barra a simple antes de guardar
         const normalized = username.trim().replace(/\\\\/g, '\\');
+        const validPattern = /^[A-Za-z0-9._-]+\\[A-Za-z0-9._-]+$/;
+        if (!validPattern.test(normalized)) {
+            throw new Error('Formato de usuario ERP invalido. Use DOMINIO\\usuario.');
+        }
         localStorage.setItem('erpUsername', normalized);
     } catch (e) {
         logError("Error guardando ERP Username", e);
@@ -106,6 +131,11 @@ export const setErpUsername = (username: string) => {
 
 export const clearErpUsername = () => {
     try {
+        const isProd = typeof import.meta !== 'undefined' && !!import.meta.env && import.meta.env.PROD;
+        if (isProd) {
+            logWarning('Bloqueado clearErpUsername en produccion', { source: 'apiConfig.clearErpUsername' });
+            return;
+        }
         localStorage.removeItem('erpUsername');
     } catch (e) {
         logError("Error limpiando ERP Username", e);

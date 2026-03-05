@@ -1,7 +1,7 @@
 import { RawDataRow } from '../types';
 import { insertFichaje, deleteFichajesRange, updateFichaje, uploadFichaje } from './apiService';
 import { dbService, QUEUE_STORE } from './dbService';
-import { logError, logWarning } from '../utils/logger';
+import { logError, logInfo, logWarning } from '../utils/logger';
 
 const QUEUE_KEY = 'hr_app_sync_queue'; // For migration
 const AUDIT_LOG_KEY = 'hr_app_audit_log';
@@ -53,7 +53,10 @@ export const SyncService = {
                     await dbService.put(QUEUE_STORE, item);
                 }
                 localStorage.removeItem(QUEUE_KEY);
-                console.log("✅ Sync Queue migrated to IndexedDB");
+                logInfo('Sync queue migrated to IndexedDB', {
+                    source: 'syncService.ensureInitialized',
+                    migratedItems: parsed.length
+                });
             }
         } catch (e) {
             logError("Migration error", e);

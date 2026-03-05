@@ -20,6 +20,16 @@ type OperariosCacheEntry = {
 const jobDataCache = new Map<string, JobDataCacheEntry>();
 let operariosCache: OperariosCacheEntry | null = null;
 
+const isAbortLikeError = (error: unknown): boolean => {
+    if (!error) return false;
+    if (typeof DOMException !== 'undefined' && error instanceof DOMException && error.name === 'AbortError') return true;
+    if (error instanceof Error) {
+        if (error.name === 'AbortError') return true;
+        return /abort(ed)?/i.test(error.message);
+    }
+    return false;
+};
+
 export const useJobData = (
     startDate: string,
     endDate: string,
@@ -113,6 +123,9 @@ export const useJobData = (
                         );
                         return { id: String(op.IDOperario), entries };
                     } catch (err) {
+                        if (controller.signal.aborted || isAbortLikeError(err)) {
+                            return { id: String(op.IDOperario), entries: [] };
+                        }
                         logWarning(`Error fetching for op ${op.IDOperario}`, err);
                         return { id: String(op.IDOperario), entries: [] };
                     }

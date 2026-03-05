@@ -1,162 +1,202 @@
 /**
- * SERVICIO DE PARSEO Y VALIDACIÓN DE EXCEL
- * 
+ * SERVICIO DE PARSEO Y VALIDACION DE EXCEL
+ *
  * Responsabilidad: Leer archivo Excel "LISTADO DE CARGA" y extraer
- * información de prioridades de fabricación
- * 
+ * informacion de prioridades de fabricacion.
+ *
  * Especificaciones:
  * - Hoja requerida: "BASE DATOS"
  * - Inicio de datos: Fila 44
- * - Columnas críticas: F, H, I, K, L, N, R, T, V
+ * - Columnas criticas: F, H, I, K, L, N, R, T, V
  */
 
-import * as XLSX from 'xlsx';
 import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 import { PriorityArticle } from '../types';
-import { logError, logWarning } from '../utils/logger';
+import { logError, logInfo, logWarning } from '../utils/logger';
+import { MacroWorkbook } from './excelMacroService';
 
-const DEBUG_MODE = false; // Desactivado para evitar ERR_INSUFFICIENT_RESOURCES
+const DEBUG_MODE = false;
+const MAX_EXCEL_SIZE_BYTES = 8 * 1024 * 1024;
+const ALLOWED_EXCEL_EXTENSIONS = ['.xlsx', '.xlsm'];
 
-/**
- * Índices de columnas en el Excel (base 0)
- * Especificación CORREGIDA según usuario (2026-02-05):
- * 
- * F (5)  = ARTICULO       - Código del artículo a analizar
- * G (6)  = DESCRIPCION    - Descripción del artículo (ASUMIDO - cerca de ARTICULO)
- * H (7)  = CLIENTE        - Cliente que requiere la pieza
- * I (8)  = FECHA_REQUERIDA - Fecha de entrega del cliente (CLAVE para prioridad)
- * K (10) = CANTIDAD       - Cantidad requerida por cliente
- * L (11) = STOCK          - Cantidad ya fabricada
- * N (13) = PEDIDO         - Número de pedido
- * R (17) = BIN            - Stock mínimo acordado con cliente
- * T (19) = FASE_R         - Fases de fabricación pendientes
- * V (21) = LANZ           - OF de lanzamiento
- */
-const COLUMN_INDICES = {
-    ARTICULO: 5,           // Columna F: Código de artículo
-    DESCRIPCION: 6,        // Columna G: Descripción (ASUMIDO - validar con usuario)
-    CLIENTE: 7,            // Columna H: Cliente
-    FECHA_REQUERIDA: 8,    // Columna I: Fecha de entrega (CRÍTICO)
-    CANTIDAD: 10,          // Columna K: Cantidad requerida
-    STOCK: 11,             // Columna L: Stock fabricado
-    PEDIDO: 13,            // Columna N: Número de pedido
-    BIN: 17,               // Columna R: Stock mínimo
-    FASE_R: 19,            // Columna T: Fases pendientes
-    LANZ: 21               // Columna V: OF lanzamiento
-};
+const validateInputExcelFile = (file: File, context: string): void => {
+    if (!file) throw new Error('No se ha proporcionado ningun archivo.');
 
-const INITIAL_ROW = 44; // Los datos inician en fila 44
-const REQUIRED_SHEET = 'BASE DATOS';
-
-/**
- * Lee y parsea el archivo Excel de prioridades
- * 
- * @param file - Archivo Excel (File object)
- * @returns Promise con array de PriorityArticle
- * @throws Error si el formato es inválido
- */
-export async function parseExcelFile(file: File): Promise<PriorityArticle[]> {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-
-        reader.onload = (e) => {
-            try {
-                const data = new Uint8Array(e.target?.result as ArrayBuffer);
-                const workbook = XLSX.read(data, { type: 'array' });
-
-                // Validar estructura
-                if (!validateExcelStructure(workbook)) {
-                    reject(new Error(`El archivo debe contener una hoja llamada "${REQUIRED_SHEET}"`));
-                    return;
-                }
-
-                const articles = extractPriorityData(workbook.Sheets[REQUIRED_SHEET]);
-                resolve(articles);
-            } catch (error) {
-                reject(new Error(`Error al parsear Excel: ${(error as Error).message}`));
-            }
-        };
-
-        reader.onerror = () => {
-            reject(new Error('Error al leer el archivo'));
-        };
-
-        reader.readAsArrayBuffer(file);
-    });
-}
-
-/**
- * Valida que el workbook tenga la estructura esperada
- */
-export function validateExcelStructure(workbook: XLSX.WorkBook): boolean {
-    // Verificar que exista la hoja "BASE DATOS"
-    if (!workbook.Sheets[REQUIRED_SHEET]) {
-        return false;
+    const fileName = file.name.toLowerCase();
+    const hasAllowedExtension = ALLOWED_EXCEL_EXTENSIONS.some((ext) => fileName.endsWith(ext));
+    if (!hasAllowedExtension) {
+        throw new Error('Formato no permitido. Solo se admiten .xlsx o .xlsm.');
     }
 
-    return true;
-}
+    if (file.size <= 0) {
+        throw new Error('El archivo esta vacio.');
+    }
 
-/**
- * Extrae datos de prioridad desde la hoja del Excel
- */
-export function extractPriorityData(worksheet: XLSX.WorkSheet): PriorityArticle[] {
-    const articles: PriorityArticle[] = [];
-
-    // Convertir hoja a JSON para facilitar lectura
-    const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1');
+    if (file.size > MAX_EXCEL_SIZE_BYTES) {
+        throw new Error('El archivo excede el tamano maximo permitido (8 MB).');
+    }
 
     if (DEBUG_MODE) {
-        console.log('📊 [Excel Parser] Iniciando extracción de datos');
-        console.log(`📊 [Excel Parser] Rango detectado: ${worksheet['!ref']}`);
-        console.log(`📊 [Excel Parser] Filas totales: ${range.e.r + 1}`);
-        console.log(`📊 [Excel Parser] Fila inicial de datos: ${INITIAL_ROW}`);
+        logInfo('[Excel Parser] Archivo validado', {
+            source: context,
+            fileName: file.name,
+            size: file.size
+        });
+    }
+};
+
+const COLUMN_INDICES = {
+    ARTICULO: 5,
+    DESCRIPCION: 6,
+    CLIENTE: 7,
+    FECHA_REQUERIDA: 8,
+    CANTIDAD: 10,
+    STOCK: 11,
+    PEDIDO: 13,
+    BIN: 17,
+    FASE_R: 19,
+    LANZ: 21
+};
+
+const INITIAL_ROW = 44;
+const REQUIRED_SHEET = 'BASE DATOS';
+const HOJA_FINAL_NAME = 'HOJA FINAL';
+
+function normalizeExcelCellValue(value: ExcelJS.CellValue | null | undefined): any {
+    if (value === null || value === undefined) return null;
+    if (value instanceof Date) return value;
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
+
+    if (typeof value === 'object') {
+        if ('result' in value) return normalizeExcelCellValue(value.result as ExcelJS.CellValue);
+        if ('text' in value && typeof value.text === 'string') return value.text;
+        if ('richText' in value && Array.isArray(value.richText)) {
+            return value.richText.map((part) => part.text || '').join('');
+        }
+        if ('hyperlink' in value && typeof value.hyperlink === 'string') {
+            return value.text || value.hyperlink;
+        }
+        if ('formula' in value) return null;
+        if ('error' in value) return null;
     }
 
-    let articulosValidos = 0;
+    return String(value);
+}
+
+function excelSerialToDate(serial: number): Date | null {
+    if (!Number.isFinite(serial)) return null;
+    const excelEpoch = Date.UTC(1899, 11, 30);
+    const utc = new Date(excelEpoch + (serial * 86400000));
+    if (isNaN(utc.getTime())) return null;
+    return new Date(
+        utc.getUTCFullYear(),
+        utc.getUTCMonth(),
+        utc.getUTCDate(),
+        utc.getUTCHours(),
+        utc.getUTCMinutes(),
+        utc.getUTCSeconds()
+    );
+}
+
+function parseExcelDateValue(value: any): Date | null {
+    if (!value) return null;
+    if (value instanceof Date) return isNaN(value.getTime()) ? null : value;
+    if (typeof value === 'number') return excelSerialToDate(value);
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (!trimmed) return null;
+
+        const esMatch = trimmed.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})$/);
+        if (esMatch) {
+            const day = Number(esMatch[1]);
+            const month = Number(esMatch[2]);
+            const yearRaw = Number(esMatch[3]);
+            const year = yearRaw < 100 ? 2000 + yearRaw : yearRaw;
+            const candidate = new Date(year, month - 1, day);
+            if (!isNaN(candidate.getTime())) return candidate;
+        }
+
+        const parsed = new Date(trimmed);
+        return isNaN(parsed.getTime()) ? null : parsed;
+    }
+
+    return null;
+}
+
+function parseNumber(value: any): number {
+    if (value === null || value === undefined || value === '') {
+        return 0;
+    }
+    const num = Number(value);
+    return isNaN(num) ? 0 : num;
+}
+
+function getCellValue(worksheet: ExcelJS.Worksheet, row: number, col: number): any {
+    const rawValue = worksheet.getRow(row + 1).getCell(col + 1).value;
+    const value = normalizeExcelCellValue(rawValue);
+    if (typeof value === 'string' && value.length > 5000) {
+        return value.slice(0, 5000);
+    }
+    return value;
+}
+
+export async function parseExcelFile(file: File): Promise<PriorityArticle[]> {
+    try {
+        validateInputExcelFile(file, 'excelPriorityService.parseExcelFile');
+
+        const arrayBuffer = await file.arrayBuffer();
+        const workbook = new ExcelJS.Workbook();
+        await workbook.xlsx.load(arrayBuffer);
+
+        if (!validateExcelStructure(workbook)) {
+            throw new Error(`El archivo debe contener una hoja llamada "${REQUIRED_SHEET}"`);
+        }
+
+        const worksheet = workbook.getWorksheet(REQUIRED_SHEET);
+        if (!worksheet) {
+            throw new Error(`No se pudo leer la hoja "${REQUIRED_SHEET}".`);
+        }
+
+        return extractPriorityData(worksheet);
+    } catch (error) {
+        throw new Error(`Error al parsear Excel: ${(error as Error).message}`);
+    }
+}
+
+export function validateExcelStructure(workbook: ExcelJS.Workbook): boolean {
+    return !!workbook.getWorksheet(REQUIRED_SHEET);
+}
+
+export function extractPriorityData(worksheet: ExcelJS.Worksheet): PriorityArticle[] {
+    const articles: PriorityArticle[] = [];
+    const totalRows = worksheet.rowCount;
+
+    if (DEBUG_MODE) {
+        logInfo('[Excel Parser] Iniciando extraccion', {
+            source: 'excelPriorityService.extractPriorityData',
+            totalRows,
+            initialRow: INITIAL_ROW
+        });
+    }
+
     let articulosSinFecha = 0;
-    const MAX_ARTICLES = 5000; // Aumentado para leer todo el archivo (usuario tiene ~4000 filas)
+    const MAX_ARTICLES = 5000;
 
-    console.log(`📊 Iniciando parseo (máx ${MAX_ARTICLES} artículos)...`);
-
-    // Iterar desde fila 44 (índice 43 en base 0)
-    for (let rowNum = INITIAL_ROW - 1; rowNum <= range.e.r; rowNum++) {
-        // Límite de seguridad
+    for (let rowNum = INITIAL_ROW - 1; rowNum < totalRows; rowNum++) {
         if (articles.length >= MAX_ARTICLES) {
-            logWarning(`⚠️ LÍMITE ALCANZADO: Se parsearon ${MAX_ARTICLES} artículos. Resto del Excel ignorado.`);
+            logWarning(`Limite alcanzado: se parsearon ${MAX_ARTICLES} articulos. Resto del Excel ignorado.`);
             break;
         }
 
         try {
-            // Parsear fecha requerida (ahora en columna I)
             const fechaCellValue = getCellValue(worksheet, rowNum, COLUMN_INDICES.FECHA_REQUERIDA);
-            let fechaRequerida: Date | null = null;
-
-            if (fechaCellValue) {
-                if (typeof fechaCellValue === 'number') {
-                    const parsed = XLSX.SSF.parse_date_code(fechaCellValue);
-                    fechaRequerida = new Date(parsed.y, parsed.m - 1, parsed.d);
-                } else if (typeof fechaCellValue === 'string') {
-                    const parsed = new Date(fechaCellValue);
-                    if (!isNaN(parsed.getTime())) {
-                        fechaRequerida = parsed;
-                    }
-                }
-            }
+            const fechaRequerida = parseExcelDateValue(fechaCellValue);
 
             const articulo = getCellValue(worksheet, rowNum, COLUMN_INDICES.ARTICULO);
+            if (!articulo || articulo.toString().trim() === '') continue;
 
-            if (!articulo || articulo.toString().trim() === '') {
-                continue;
-            }
-
-            // Contar artículos sin fecha (pero NO descartarlos)
-            if (!fechaRequerida) {
-                articulosSinFecha++;
-            }
-
-            articulosValidos++;
+            if (!fechaRequerida) articulosSinFecha++;
 
             const article: PriorityArticle = {
                 articulo: articulo.toString().trim(),
@@ -172,223 +212,92 @@ export function extractPriorityData(worksheet: XLSX.WorkSheet): PriorityArticle[
             };
 
             articles.push(article);
-
-            // Log detallado SOLO del primer artículo para validación
-            if (DEBUG_MODE && articles.length === 1) {
-                console.log(`\n📋 PRIMERA FILA PARSEADA (Fila ${rowNum}) - VALIDAR COLUMNAS:`);
-                console.log(`   F (${COLUMN_INDICES.ARTICULO}): ARTICULO = "${article.articulo}"`);
-                console.log(`   G (${COLUMN_INDICES.DESCRIPCION}): DESCRIPCION = "${article.descripcion}"`);
-                console.log(`   H (${COLUMN_INDICES.CLIENTE}): CLIENTE = "${article.cliente}"`);
-                console.log(`   I (${COLUMN_INDICES.FECHA_REQUERIDA}): FECHA_REQUERIDA = ${article.fechaRequerida?.toLocaleDateString()}`);
-                console.log(`   K (${COLUMN_INDICES.CANTIDAD}): CANTIDAD = ${article.cantidad}`);
-                console.log(`   L (${COLUMN_INDICES.STOCK}): STOCK = ${article.stock}`);
-                console.log(`   N (${COLUMN_INDICES.PEDIDO}): PEDIDO = "${article.pedido}"`);
-                console.log(`   R (${COLUMN_INDICES.BIN}): BIN = ${article.bin}`);
-                console.log(`   T (${COLUMN_INDICES.FASE_R}): FASE_R = "${article.faseR}"`);
-                console.log(`   V (${COLUMN_INDICES.LANZ}): LANZ = "${article.lanz}"`);
-                console.log(`   ⚠️ SI ALGO NO COINCIDE, AVISAR PARA AJUSTAR ÍNDICES`);
-            }
         } catch (error) {
             if (DEBUG_MODE) {
-                logWarning(`⚠️ Error parseando fila ${rowNum}:`, error);
+                logWarning(`Error parseando fila ${rowNum}:`, error);
             }
         }
     }
 
-    console.log(`✅ [Excel Parser] Extracción completada:`);
-    console.log(`   - Artículos leídos: ${articles.length}`);
-    console.log(`   - Artículos sin fecha (se mantienen): ${articulosSinFecha}`);
-
-    // SIEMPRE mostrar primeros artículos para diagnóstico (fuera de DEBUG_MODE)
-    console.log(`\n📦 PRIMEROS 10 ARTÍCULOS DEL EXCEL (columna F + V):`);
-    articles.slice(0, 10).forEach((art, idx) => {
-        console.log(`   ${idx + 1}. Artículo: "${art.articulo}" | OF: "${art.lanz}" - Cliente: ${art.cliente}`);
-    });
-
-    // DIAGNÓSTICO ESPECÍFICO: Buscar si "30100-03" existe en algún lugar del Excel
-    const targetArticle = "30100-03";
-    const found = articles.find(a => a.articulo?.includes(targetArticle));
-    if (found) {
-        console.log(`\n✅ ¡DIAGNÓSTICO ÉXITO! El artículo "${targetArticle}" SÍ existe en el Excel:`);
-        console.log(`   - Artículo: "${found.articulo}"`);
-        console.log(`   - OF (Lanz): "${found.lanz}"`);
-        console.log(`   - Cliente: "${found.cliente}"`);
-        console.log(`   👉 Si el ERP tiene este mismo Artículo y OF, el match funcionará.`);
-    } else {
-        console.log(`\n❌ DIAGNÓSTICO FALLIDO: El artículo "${targetArticle}" NO se encontró en los ${articles.length} artículos leídos.`);
-        console.log(`   Posibles causas:`);
-        console.log(`   1. El código en Excel es diferente (ej: tiene prefijos o espacios)`);
-        console.log(`   2. Está más allá de la fila 5000`);
+    if (DEBUG_MODE) {
+        logInfo('[Excel Parser] Extraccion completada', {
+            source: 'excelPriorityService.extractPriorityData',
+            articlesRead: articles.length,
+            articlesWithoutDate: articulosSinFecha,
+        });
     }
 
     return articles;
 }
 
-/**
- * Obtiene el valor de una celda por fila y columna
- */
-function getCellValue(worksheet: XLSX.WorkSheet, row: number, col: number): any {
-    const cellAddress = XLSX.utils.encode_cell({ r: row, c: col });
-    const cell = worksheet[cellAddress];
-    return cell ? cell.v : null;
-}
-
-/**
- * Parsea un valor a número, devuelve 0 si no es válido
- */
-function parseNumber(value: any): number {
-    if (value === null || value === undefined || value === '') {
-        return 0;
-    }
-    const num = Number(value);
-    return isNaN(num) ? 0 : num;
-}
-
-/**
- * Valida que un archivo sea un Excel válido
- */
 export function isValidExcelFile(file: File): boolean {
-    const validExtensions = ['.xlsx', '.xls'];
     const fileName = file.name.toLowerCase();
-    return validExtensions.some(ext => fileName.endsWith(ext));
+    return ALLOWED_EXCEL_EXTENSIONS.some((ext) => fileName.endsWith(ext));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PARSER DE HOJA FINAL
-// Para cuando el usuario ya tiene un Excel con la hoja "HOJA FINAL" generada
-// previamente por las macros (sin necesitar ejecutar macros de nuevo).
-//
-// Columnas de HOJA FINAL (base 0, fila 0 = encabezados, datos desde fila 1):
-//   A(0)  Artículo
-//   B(1)  Desc. Artículo
-//   C(2)  Fecha Entrega
-//   D(3)  C.Pendiente
-//   E(4)  C.Lanzada
-//   F(5)  Stock
-//   G(6)  CFases
-//   H(7)  NOrden
-// ─────────────────────────────────────────────────────────────────────────────
-const HOJA_FINAL_NAME = 'HOJA FINAL';
-
-/**
- * Lee un archivo Excel que contiene la hoja "HOJA FINAL" y extrae los artículos.
- */
 export async function parseHojaFinalFile(file: File): Promise<PriorityArticle[]> {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
+    try {
+        validateInputExcelFile(file, 'excelPriorityService.parseHojaFinalFile');
 
-        reader.onload = (e) => {
-            try {
-                const data = new Uint8Array(e.target?.result as ArrayBuffer);
-                const workbook = XLSX.read(data, { type: 'array', cellDates: false });
+        const arrayBuffer = await file.arrayBuffer();
+        const workbook = new ExcelJS.Workbook();
+        await workbook.xlsx.load(arrayBuffer);
 
-                if (!workbook.Sheets[HOJA_FINAL_NAME]) {
-                    reject(new Error(`El archivo no contiene la hoja "${HOJA_FINAL_NAME}". Asegúrese de usar un Excel procesado por las macros.`));
-                    return;
-                }
+        const worksheet = workbook.getWorksheet(HOJA_FINAL_NAME);
+        if (!worksheet) {
+            throw new Error(`El archivo no contiene la hoja "${HOJA_FINAL_NAME}". Asegurese de usar un Excel procesado por las macros.`);
+        }
 
-                const articles = extractArticlesFromHojaFinal(workbook.Sheets[HOJA_FINAL_NAME]);
-                resolve(articles);
-            } catch (err) {
-                reject(new Error(`Error al parsear HOJA FINAL: ${(err as Error).message}`));
-            }
-        };
-
-        reader.onerror = () => reject(new Error('Error al leer el archivo'));
-        reader.readAsArrayBuffer(file);
-    });
+        return extractArticlesFromHojaFinal(worksheet);
+    } catch (error) {
+        throw new Error(`Error al parsear HOJA FINAL: ${(error as Error).message}`);
+    }
 }
 
-function extractArticlesFromHojaFinal(ws: XLSX.WorkSheet): PriorityArticle[] {
-    const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
+function extractArticlesFromHojaFinal(ws: ExcelJS.Worksheet): PriorityArticle[] {
     const articles: PriorityArticle[] = [];
+    const totalRows = ws.rowCount;
 
-    // Fila 0 = encabezados → datos desde fila 1
-    for (let rowNum = 1; rowNum <= range.e.r; rowNum++) {
-        const articuloCell = ws[XLSX.utils.encode_cell({ r: rowNum, c: 0 })];
-        const articulo = articuloCell ? articuloCell.v : null;
+    for (let rowNum = 1; rowNum < totalRows; rowNum++) {
+        const articulo = getCellValue(ws, rowNum, 0);
         if (!articulo || String(articulo).trim() === '') continue;
 
-        const fechaCellValue = ws[XLSX.utils.encode_cell({ r: rowNum, c: 2 })]?.v;
-        let fechaRequerida: Date | null = null;
-        if (fechaCellValue) {
-            if (typeof fechaCellValue === 'number') {
-                const parsed = XLSX.SSF.parse_date_code(fechaCellValue);
-                fechaRequerida = new Date(parsed.y, parsed.m - 1, parsed.d);
-            } else if (typeof fechaCellValue === 'string') {
-                const parsed = new Date(fechaCellValue);
-                if (!isNaN(parsed.getTime())) fechaRequerida = parsed;
-            }
-        }
+        const fechaRequerida = parseExcelDateValue(getCellValue(ws, rowNum, 2));
 
-        // NOrden: puede ser lista separada por comas → usar el primero como OF
-        const nOrdenRaw = ws[XLSX.utils.encode_cell({ r: rowNum, c: 7 })]?.v;
-        let lanz = '';
-        if (nOrdenRaw) {
-            const parts = String(nOrdenRaw).split(',');
-            lanz = parts[0]?.trim() || '';
-        }
+        const nOrdenRaw = getCellValue(ws, rowNum, 7);
+        const lanz = nOrdenRaw ? String(nOrdenRaw).split(',')[0]?.trim() || '' : '';
 
         const parseFinalNum = (colIdx: number): number => {
-            const val = ws[XLSX.utils.encode_cell({ r: rowNum, c: colIdx })]?.v;
-            if (val === null || val === undefined || val === '') return 0;
-            const n = Number(val);
-            return isNaN(n) ? 0 : n;
+            const val = getCellValue(ws, rowNum, colIdx);
+            return parseNumber(val);
         };
 
         articles.push({
             articulo: String(articulo).trim(),
-            descripcion: String(ws[XLSX.utils.encode_cell({ r: rowNum, c: 1 })]?.v || '').trim(),
+            descripcion: String(getCellValue(ws, rowNum, 1) || '').trim(),
             fechaRequerida,
-            cantidad: parseFinalNum(3),   // C.Pendiente
+            cantidad: parseFinalNum(3),
             stock: parseFinalNum(5),
             cliente: '',
             pedido: '',
             bin: 0,
-            faseR: String(ws[XLSX.utils.encode_cell({ r: rowNum, c: 6 })]?.v || '').trim(),
+            faseR: String(getCellValue(ws, rowNum, 6) || '').trim(),
             lanz
         });
     }
 
-    console.log(`✅ [HOJA FINAL Parser] ${articles.length} artículos extraídos`);
+    if (DEBUG_MODE) {
+        logInfo('[HOJA FINAL Parser] Articulos extraidos', {
+            source: 'excelPriorityService.extractArticlesFromHojaFinal',
+            articles: articles.length
+        });
+    }
+
     return articles;
 }
 
-/**
- * Exporta un objeto Workbook de XLSX a un archivo descargable en el navegador.
- */
 function parseDateForExport(value: any): Date | null {
-    if (!value) return null;
-
-    if (value instanceof Date) {
-        return isNaN(value.getTime()) ? null : value;
-    }
-
-    if (typeof value === 'number') {
-        const parsed = XLSX.SSF.parse_date_code(value);
-        if (!parsed || !parsed.y || !parsed.m || !parsed.d) return null;
-        return new Date(parsed.y, parsed.m - 1, parsed.d);
-    }
-
-    if (typeof value === 'string') {
-        const trimmed = value.trim();
-        if (!trimmed) return null;
-
-        const esMatch = trimmed.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})$/);
-        if (esMatch) {
-            const day = Number(esMatch[1]);
-            const month = Number(esMatch[2]);
-            const yearRaw = Number(esMatch[3]);
-            const year = yearRaw < 100 ? 2000 + yearRaw : yearRaw;
-            const candidate = new Date(year, month - 1, day);
-            if (!isNaN(candidate.getTime())) return candidate;
-        }
-
-        const candidate = new Date(trimmed);
-        return isNaN(candidate.getTime()) ? null : candidate;
-    }
-
-    return null;
+    return parseExcelDateValue(value);
 }
 
 function computeColumnWidthFromData(rows: any[][], colIndex: number): number {
@@ -403,10 +312,10 @@ function computeColumnWidthFromData(rows: any[][], colIndex: number): number {
     return Math.min(maxLen, 70);
 }
 
-/**
- * Exporta con formato profesional (fuente, encabezados, bordes, filtros y fechas).
- */
-export const exportWorkbookToFile = async (workbook: XLSX.WorkBook, fileName: string = 'despues macros.xlsx'): Promise<void> => {
+export const exportWorkbookToFile = async (
+    workbook: MacroWorkbook,
+    fileName: string = 'despues macros.xlsx'
+): Promise<void> => {
     try {
         const professionalWb = new ExcelJS.Workbook();
         const sourceFirstSheet = workbook.SheetNames[0];
@@ -415,21 +324,16 @@ export const exportWorkbookToFile = async (workbook: XLSX.WorkBook, fileName: st
 
         for (const sheetName of workbook.SheetNames) {
             const sourceSheet = workbook.Sheets[sheetName];
-            const rows = XLSX.utils.sheet_to_json(sourceSheet, {
-                header: 1,
-                raw: true,
-                defval: ''
-            }) as any[][];
+            if (!sourceSheet) continue;
 
+            const rows = sourceSheet.rows || [];
             const targetSheet = professionalWb.addWorksheet(sheetName, {
                 views: [{ state: 'frozen', ySplit: 1 }]
             });
 
             if (!rows.length) continue;
 
-            for (const row of rows) {
-                targetSheet.addRow(row);
-            }
+            rows.forEach((row) => targetSheet.addRow(row));
 
             const maxCols = rows.reduce((max, row) => Math.max(max, row.length), 0);
             if (maxCols === 0) continue;
@@ -439,17 +343,17 @@ export const exportWorkbookToFile = async (workbook: XLSX.WorkBook, fileName: st
                 to: { row: 1, column: maxCols }
             };
 
-            const sourceCols = ((sourceSheet as any)['!cols'] || []) as Array<{ wch?: number }>;
             for (let c = 1; c <= maxCols; c++) {
-                const sourceWidth = sourceCols[c - 1]?.wch;
+                const sourceWidth = sourceSheet.columnWidths?.[c - 1];
                 targetSheet.getColumn(c).width = sourceWidth || computeColumnWidthFromData(rows, c - 1);
             }
 
-            const headerValues = (rows[0] || []).map(header => String(header || '').toLowerCase());
-            const dateColumns: number[] = [];
-            headerValues.forEach((header, idx) => {
-                if (header.includes('fecha')) dateColumns.push(idx + 1);
-            });
+            const headerValues = (rows[0] || []).map((header) => String(header || '').toLowerCase());
+            const dateColumns = sourceSheet.dateColumns?.length
+                ? sourceSheet.dateColumns.map((idx) => idx + 1)
+                : headerValues
+                    .map((header, idx) => (header.includes('fecha') ? idx + 1 : -1))
+                    .filter((idx) => idx > 0);
 
             for (let r = 1; r <= targetSheet.rowCount; r++) {
                 const row = targetSheet.getRow(r);
@@ -497,8 +401,13 @@ export const exportWorkbookToFile = async (workbook: XLSX.WorkBook, fileName: st
                     cell.numFmt = 'dd/mm/yyyy';
 
                     const diffDays = Math.floor(
-                        (new Date(parsedDate.getFullYear(), parsedDate.getMonth(), parsedDate.getDate()).getTime() - todayAtStart.getTime()) /
-                        (1000 * 60 * 60 * 24)
+                        (
+                            new Date(
+                                parsedDate.getFullYear(),
+                                parsedDate.getMonth(),
+                                parsedDate.getDate()
+                            ).getTime() - todayAtStart.getTime()
+                        ) / (1000 * 60 * 60 * 24)
                     );
 
                     if (diffDays >= 0 && diffDays <= 5) {
@@ -546,7 +455,10 @@ export const exportWorkbookToFile = async (workbook: XLSX.WorkBook, fileName: st
         });
 
         saveAs(blob, fileName);
-        console.log(`✅ Archivo ${fileName} exportado y descargado.`);
+        logInfo('Archivo Excel exportado y descargado', {
+            source: 'excelPriorityService.exportWorkbookToFile',
+            fileName
+        });
     } catch (error) {
         logError('Error al exportar el archivo Excel:', error);
         throw new Error('No se pudo generar el archivo Excel para descarga.');

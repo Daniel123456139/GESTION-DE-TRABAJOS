@@ -14,12 +14,6 @@ export interface AppAuthUser {
   erpEmployeeId: number;
 }
 
-// --- MOCK DATA (Basado en CSV proporcionado) ---
-// Estos usuarios funcionarán en modo "Offline" o si Firebase no está configurado
-const MOCK_AUTH_USERS: AppAuthUser[] = []; // Empty for security
-
-const MOCK_STORAGE_KEY = 'mock_auth_user';
-
 // --- SERVICE IMPLEMENTATION ---
 
 export async function signInWithEmailPassword(email: string, password: string): Promise<AppAuthUser> {
@@ -78,9 +72,6 @@ export async function signOutApp(): Promise<void> {
       reason: e
     });
   }
-  // Siempre limpiar storage local por si estamos en modo mock
-  localStorage.removeItem(MOCK_STORAGE_KEY);
-  window.dispatchEvent(new Event('storage'));
 }
 
 export function subscribeToAuthChanges(callback: (user: AppAuthUser | null) => void): () => void {
@@ -101,13 +92,7 @@ export function subscribeToAuthChanges(callback: (user: AppAuthUser | null) => v
           callback(null);
         }
       } else {
-        // Si no hay usuario en Firebase, comprobar si hay usuario Mock en localstorage
-        const stored = localStorage.getItem(MOCK_STORAGE_KEY);
-        if (stored) {
-          callback(JSON.parse(stored));
-        } else {
-          callback(null);
-        }
+        callback(null);
       }
     });
   } catch (error) {
@@ -116,6 +101,18 @@ export function subscribeToAuthChanges(callback: (user: AppAuthUser | null) => v
     });
     callback(null);
     return () => { };
+  }
+}
+
+export async function getCurrentFirebaseToken(forceRefresh = false): Promise<string | null> {
+  try {
+    const app = getFirebaseApp();
+    const auth = getAuth(app);
+    const user = auth.currentUser;
+    if (!user) return null;
+    return await user.getIdToken(forceRefresh);
+  } catch {
+    return null;
   }
 }
 

@@ -5,7 +5,7 @@ import { CalendarioDia } from '../../services/erpApi';
 import { useHrPortalData } from '../../hooks/useHrPortalData';
 import { getSmartDefaultDateRange } from '../../utils/localDate';
 import { exportUnproductivityToXlsx } from '../../services/exports/unproductivityExportService';
-import { logWarning } from '../../utils/logger';
+import { logInfo, logWarning } from '../../utils/logger';
 import {
     Briefcase,
     LayoutDashboard,
@@ -198,7 +198,11 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
     }, [companyCalendarDays]);
 
     const handleOpenAdjustmentModal = (date?: string, employeeId?: number) => {
-        console.log("Opening adjustment modal for", date, employeeId);
+        logInfo('Opening adjustment modal', {
+            source: 'HrLayout.handleOpenAdjustmentModal',
+            date,
+            employeeId
+        });
         // This will be connected to the actual modal state later if needed
     };
 

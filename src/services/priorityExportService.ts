@@ -1,15 +1,28 @@
 /**
- * SERVICIO DE EXPORTACIÓN DE ANÁLISIS DE PRIORIDADES
- * 
- * Responsabilidad: Generar reportes PDF y Excel del dashboard de prioridades
+ * SERVICIO DE EXPORTACION DE ANALISIS DE PRIORIDADES
+ *
+ * Responsabilidad: Generar reportes PDF y Excel del dashboard de prioridades.
  */
 
-import jsPDF from 'jspdf';
+import ExcelJS from 'exceljs';
 import html2canvas from 'html2canvas';
-import * as XLSX from 'xlsx';
+import { saveAs } from 'file-saver';
+import { rgb } from 'pdf-lib';
 import { EmployeePriorityAnalysis, GlobalPriorityStats } from '../types';
 import { formatHours } from './priorityAnalysisService';
 import { logError, logWarning } from '../utils/logger';
+import {
+    A4_HEIGHT,
+    A4_WIDTH,
+    PAGE_MARGIN,
+    addA4Page,
+    addStandardFooter,
+    createPdfBundle,
+    drawCenteredText,
+    sanitizePdfText,
+    savePdfFile,
+    wrapText,
+} from './pdf/pdfExportUtils';
 
 interface ExportOptions {
     startDate: string;
@@ -17,23 +30,12 @@ interface ExportOptions {
     department?: string;
 }
 
-/**
- * Exporta dashboard completo a PDF
- * Captura el contenido visual del dashboard incluyendo gráficos
- * 
- * @param stats - Estadísticas globales
- * @param employeeData - Datos de empleados
- * @param options - Opciones de exportación
- */
 export async function exportPriorityDashboardToPDF(
     stats: GlobalPriorityStats,
     employeeData: EmployeePriorityAnalysis[],
     options: ExportOptions
 ): Promise<void> {
-    const pdf = new jsPDF('p', 'mm', 'a4');
-    const pageWidth = pdf.internal.pageSize.getWidth();
-    const pageHeight = pdf.internal.pageSize.getHeight();
-    let yPosition = 15;
+    const { pdfDoc, fonts } = await createPdfBundle();
 
     const captureElement = document.getElementById('priority-dashboard-capture');
     if (captureElement) {
@@ -47,222 +49,244 @@ export async function exportPriorityDashboardToPDF(
                 scrollX: 0,
                 scrollY: -window.scrollY,
                 ignoreElements: (el) => (el as HTMLElement).dataset?.exportIgnore === 'true',
-                onclone: (doc) => {
-                    doc.body.style.background = '#ffffff';
-                    const root = doc.getElementById('priority-dashboard-capture');
-                    if (root) {
-                        root.style.background = '#ffffff';
-                        root.style.padding = '16px';
-                        root.style.maxWidth = '1100px';
-                        root.style.margin = '0 auto';
-                    }
-
-                    const gradientText = doc.querySelectorAll('.bg-clip-text');
-                    gradientText.forEach((el) => {
-                        const node = el as HTMLElement;
-                        node.style.backgroundImage = 'none';
-                        node.style.color = '#4c1d95';
-                        (node.style as any).webkitTextFillColor = '#4c1d95';
-                    });
-                }
             });
 
-            const imgData = canvas.toDataURL('image/png');
-            const imgWidth = pageWidth - 10;
-            const imgHeight = (canvas.height * imgWidth) / canvas.width;
+            const imageBytes = await fetch(canvas.toDataURL('image/png')).then((res) => res.arrayBuffer());
+            const image = await pdfDoc.embedPng(imageBytes);
+            const page = addA4Page(pdfDoc);
 
-            let heightLeft = imgHeight;
-            let position = 5;
+            const maxWidth = A4_WIDTH - (PAGE_MARGIN * 2);
+            const maxHeight = A4_HEIGHT - (PAGE_MARGIN * 2);
+            const scale = Math.min(maxWidth / image.width, maxHeight / image.height);
+            const imageWidth = image.width * scale;
+            const imageHeight = image.height * scale;
 
-            pdf.addImage(imgData, 'PNG', 5, position, imgWidth, imgHeight);
-            heightLeft -= (pageHeight - 10);
-
-            while (heightLeft > 0) {
-                position = heightLeft - imgHeight + 5;
-                pdf.addPage();
-                pdf.addImage(imgData, 'PNG', 5, position, imgWidth, imgHeight);
-                heightLeft -= (pageHeight - 10);
-            }
-
-            pdf.addPage();
-            yPosition = 15;
+            page.drawImage(image, {
+                x: (A4_WIDTH - imageWidth) / 2,
+                y: A4_HEIGHT - PAGE_MARGIN - imageHeight,
+                width: imageWidth,
+                height: imageHeight,
+            });
         } catch (error) {
-            logWarning('Error capturando dashboard, usando PDF estándar', error);
+            logWarning('No se pudo capturar el dashboard visual para PDF.', error);
         }
     }
 
-    // === ENCABEZADO ===
-    pdf.setFontSize(18);
-    pdf.setFont('helvetica', 'bold');
-    pdf.text('ANÁLISIS DE PRIORIDADES', pageWidth / 2, yPosition, { align: 'center' });
+    let page = addA4Page(pdfDoc);
+    let y = A4_HEIGHT - PAGE_MARGIN;
 
-    yPosition += 10;
-    pdf.setFontSize(10);
-    pdf.setFont('helvetica', 'normal');
-    pdf.text(
+    const ensureSpace = (requiredHeight: number): void => {
+        if (y - requiredHeight < PAGE_MARGIN + 24) {
+            page = addA4Page(pdfDoc);
+            y = A4_HEIGHT - PAGE_MARGIN;
+        }
+    };
+
+    const writeLine = (text: string, size = 10, bold = false): void => {
+        ensureSpace(size + 6);
+        page.drawText(sanitizePdfText(text), {
+            x: PAGE_MARGIN,
+            y,
+            size,
+            font: bold ? fonts.bold : fonts.regular,
+            color: rgb(0.12, 0.12, 0.12)
+        });
+        y -= size + 6;
+    };
+
+    const writeWrapped = (text: string, size = 10): void => {
+        const lines = wrapText(fonts.regular, text, size, A4_WIDTH - (PAGE_MARGIN * 2));
+        for (const line of lines) writeLine(line, size, false);
+    };
+
+    drawCenteredText(page, fonts.bold, 'ANALISIS DE PRIORIDADES', y - 4, 18, rgb(0.2, 0.2, 0.2));
+    y -= 28;
+
+    drawCenteredText(
+        page,
+        fonts.regular,
         `Periodo: ${options.startDate} - ${options.endDate}`,
-        pageWidth / 2,
-        yPosition,
-        { align: 'center' }
+        y,
+        10,
+        rgb(0.25, 0.25, 0.25)
     );
+    y -= 16;
 
     if (options.department && options.department !== 'all') {
-        yPosition += 5;
-        pdf.text(
+        drawCenteredText(
+            page,
+            fonts.regular,
             `Departamento: ${options.department}`,
-            pageWidth / 2,
-            yPosition,
-            { align: 'center' }
+            y,
+            10,
+            rgb(0.25, 0.25, 0.25)
         );
+        y -= 16;
     }
 
-    yPosition += 15;
+    y -= 8;
+    writeLine('RESUMEN GLOBAL', 12, true);
+    writeWrapped(`Tasa de exito: ${stats.tasaExito.toFixed(0)}%`);
+    writeWrapped(`Total articulos analizados: ${stats.totalArticulos}`);
+    writeWrapped(`Trabajos correctos urgentes: ${stats.trabajosCorrectos} (${formatHours(stats.horasCorrectas)})`);
+    writeWrapped(`Desviaciones no urgentes: ${stats.desviaciones} (${formatHours(stats.horasDesviadas)})`);
 
-    // === RESUMEN GLOBAL ===
-    pdf.setFontSize(14);
-    pdf.setFont('helvetica', 'bold');
-    pdf.text('Cumplimiento de Prioridad', 15, yPosition);
-    yPosition += 8;
-
-    pdf.setFontSize(11);
-    pdf.setFont('helvetica', 'normal');
-
-    const summaryData = [
-        `Tasa de Éxito: ${stats.tasaExito.toFixed(0)}%`,
-        `Total Artículos Analizados: ${stats.totalArticulos}`,
-        '',
-        `✅ Trabajos Correctos (Urgentes): ${stats.trabajosCorrectos} | ${formatHours(stats.horasCorrectas)}`,
-        `❌ Desviaciones (NO Urgentes): ${stats.desviaciones} | ${formatHours(stats.horasDesviadas)}`
-    ];
-
-    summaryData.forEach(line => {
-        pdf.text(line, 15, yPosition);
-        yPosition += 6;
-    });
-
-    yPosition += 10;
-
-    // === TOP 5 DESVIACIONES ===
-    pdf.setFontSize(14);
-    pdf.setFont('helvetica', 'bold');
-    pdf.text('TOP 5 Operarios con Más Desviaciones', 15, yPosition);
-    yPosition += 8;
-
+    y -= 6;
+    writeLine('TOP 5 OPERARIOS CON MAS DESVIACIONES', 12, true);
     const top5 = [...employeeData]
         .sort((a, b) => b.trabajosNoUrgentes - a.trabajosNoUrgentes)
         .slice(0, 5);
 
-    pdf.setFontSize(10);
-    pdf.setFont('helvetica', 'normal');
-
     top5.forEach((emp, index) => {
-        const text = `${index + 1}. ${emp.employeeName}: ${emp.trabajosNoUrgentes} artículos NO urgentes → ${formatHours(emp.horasNoUrgentes)}`;
-        pdf.text(text, 15, yPosition);
-        yPosition += 6;
+        writeWrapped(
+            `${index + 1}. ${emp.employeeName}: ${emp.trabajosNoUrgentes} no urgentes, ${formatHours(emp.horasNoUrgentes)}`,
+            10
+        );
     });
 
-    yPosition += 10;
+    y -= 6;
+    writeLine('DETALLE POR EMPLEADO', 12, true);
 
-    // === TABLA DE EMPLEADOS ===
-    pdf.setFontSize(14);
-    pdf.setFont('helvetica', 'bold');
-    pdf.text('Detalle por Empleado', 15, yPosition);
-    yPosition += 8;
+    const columns = [
+        { title: 'Empleado', width: 130 },
+        { title: 'Urg.', width: 45 },
+        { title: 'H. Urg.', width: 55 },
+        { title: 'No Urg.', width: 55 },
+        { title: 'H. No Urg.', width: 65 },
+        { title: '%', width: 35 },
+    ];
 
-    // Headers de tabla
-    pdf.setFontSize(9);
-    pdf.setFont('helvetica', 'bold');
-    const headers = ['Empleado', 'Trab. Urg.', 'H. Urg.', 'Trab. NO Urg.', 'H. NO Urg.', '% Cump.'];
-    const colWidths = [50, 20, 25, 25, 25, 20];
-    let xPos = 15;
+    const drawTableHeader = (): void => {
+        ensureSpace(18);
+        let x = PAGE_MARGIN;
+        columns.forEach((col) => {
+            page.drawText(col.title, {
+                x,
+                y,
+                size: 9,
+                font: fonts.bold,
+                color: rgb(0.18, 0.18, 0.18)
+            });
+            x += col.width;
+        });
+        y -= 12;
+    };
 
-    headers.forEach((header, i) => {
-        pdf.text(header, xPos, yPosition);
-        xPos += colWidths[i];
-    });
+    drawTableHeader();
 
-    yPosition += 5;
-    pdf.setFont('helvetica', 'normal');
-
-    // Datos de empleados
-    employeeData.forEach(emp => {
-        if (yPosition > 270) {
-            // Nueva página si no hay espacio
-            pdf.addPage();
-            yPosition = 15;
-        }
-
-        xPos = 15;
-        const rowData = [
-            emp.employeeName.substring(0, 20), // Truncar nombre largo
-            emp.trabajosUrgentes.toString(),
+    for (const emp of employeeData) {
+        ensureSpace(14);
+        let x = PAGE_MARGIN;
+        const row = [
+            emp.employeeName.slice(0, 26),
+            String(emp.trabajosUrgentes),
             formatHours(emp.horasUrgentes),
-            emp.trabajosNoUrgentes.toString(),
+            String(emp.trabajosNoUrgentes),
             formatHours(emp.horasNoUrgentes),
             `${emp.cumplimiento.toFixed(0)}%`
         ];
 
-        rowData.forEach((data, i) => {
-            pdf.text(data, xPos, yPosition);
-            xPos += colWidths[i];
+        row.forEach((value, idx) => {
+            page.drawText(sanitizePdfText(value), {
+                x,
+                y,
+                size: 9,
+                font: fonts.regular,
+                color: rgb(0.2, 0.2, 0.2)
+            });
+            x += columns[idx].width;
         });
 
-        yPosition += 5;
+        y -= 11;
+        if (y < PAGE_MARGIN + 24) {
+            page = addA4Page(pdfDoc);
+            y = A4_HEIGHT - PAGE_MARGIN;
+            drawTableHeader();
+        }
+    }
+
+    const pages = pdfDoc.getPages();
+    const timestamp = new Date().toLocaleString('es-ES');
+    pages.forEach((p, idx) => {
+        addStandardFooter(p, fonts, idx + 1, pages.length, timestamp);
     });
 
-    // Guardar PDF
     const fileName = `analisis_prioridades_${options.startDate}_${options.endDate}.pdf`;
-    pdf.save(fileName);
+    await savePdfFile(pdfDoc, fileName);
 }
 
-/**
- * Exporta datos detallados a Excel
- * 
- * @param employeeData - Datos de análisis por empleado
- */
 export async function exportPriorityDataToExcel(
     employeeData: EmployeePriorityAnalysis[]
 ): Promise<void> {
-    const workbook = XLSX.utils.book_new();
+    try {
+        const workbook = new ExcelJS.Workbook();
 
-    // === HOJA 1: RESUMEN POR EMPLEADO ===
-    const summaryRows = employeeData.map(emp => ({
-        'Empleado': emp.employeeName,
-        'ID': emp.employeeId,
-        'Trabajos Urgentes': emp.trabajosUrgentes,
-        'Horas Urgentes': emp.horasUrgentes.toFixed(1),
-        'Trabajos NO Urgentes': emp.trabajosNoUrgentes,
-        'Horas NO Urgentes': emp.horasNoUrgentes.toFixed(1),
-        '% Cumplimiento': emp.cumplimiento.toFixed(1)
-    }));
+        const summarySheet = workbook.addWorksheet('Resumen Empleados');
+        summarySheet.columns = [
+            { header: 'Empleado', key: 'empleado', width: 28 },
+            { header: 'ID', key: 'id', width: 12 },
+            { header: 'Trabajos Urgentes', key: 'urgentes', width: 18 },
+            { header: 'Horas Urgentes', key: 'horasUrgentes', width: 16 },
+            { header: 'Trabajos NO Urgentes', key: 'noUrgentes', width: 20 },
+            { header: 'Horas NO Urgentes', key: 'horasNoUrgentes', width: 18 },
+            { header: '% Cumplimiento', key: 'cumplimiento', width: 16 }
+        ];
 
-    const summarySheet = XLSX.utils.json_to_sheet(summaryRows);
-    XLSX.utils.book_append_sheet(workbook, summarySheet, 'Resumen Empleados');
-
-    // === HOJA 2: DETALLE DE TRABAJOS ===
-    const detailRows: any[] = [];
-
-    employeeData.forEach(emp => {
-        emp.trabajosDetalle.forEach(work => {
-            detailRows.push({
-                'Empleado': emp.employeeName,
-                'Artículo/OF': work.articleId,
-                'Descripción': work.descripcion,
-                'Cliente': work.cliente,
-                'Fecha Entrega': work.fechaRequerida
-                    ? work.fechaRequerida.toLocaleDateString('es-ES')
-                    : 'Sin fecha',
-                'Días hasta Entrega': work.diasHastaEntrega ?? 'N/A',
-                'Horas Dedicadas': work.horasDedicadas.toFixed(1),
-                'Estado': work.urgency === 'URGENTE' ? '✅ URGENTE' : '🔴 NO URGENTE'
+        employeeData.forEach((emp) => {
+            summarySheet.addRow({
+                empleado: emp.employeeName,
+                id: emp.employeeId,
+                urgentes: emp.trabajosUrgentes,
+                horasUrgentes: Number(emp.horasUrgentes.toFixed(1)),
+                noUrgentes: emp.trabajosNoUrgentes,
+                horasNoUrgentes: Number(emp.horasNoUrgentes.toFixed(1)),
+                cumplimiento: Number(emp.cumplimiento.toFixed(1))
             });
         });
-    });
 
-    const detailSheet = XLSX.utils.json_to_sheet(detailRows);
-    XLSX.utils.book_append_sheet(workbook, detailSheet, 'Detalle Trabajos');
+        const detailSheet = workbook.addWorksheet('Detalle Trabajos');
+        detailSheet.columns = [
+            { header: 'Empleado', key: 'empleado', width: 28 },
+            { header: 'Articulo/OF', key: 'articulo', width: 22 },
+            { header: 'Descripcion', key: 'descripcion', width: 38 },
+            { header: 'Cliente', key: 'cliente', width: 24 },
+            { header: 'Fecha Entrega', key: 'fechaEntrega', width: 16 },
+            { header: 'Dias hasta Entrega', key: 'dias', width: 18 },
+            { header: 'Horas Dedicadas', key: 'horas', width: 16 },
+            { header: 'Estado', key: 'estado', width: 16 }
+        ];
 
-    // Guardar archivo
-    const fileName = `datos_prioridades_${new Date().toISOString().slice(0, 10)}.xlsx`;
-    XLSX.writeFile(workbook, fileName);
+        employeeData.forEach((emp) => {
+            emp.trabajosDetalle.forEach((work) => {
+                detailSheet.addRow({
+                    empleado: emp.employeeName,
+                    articulo: work.articleId,
+                    descripcion: work.descripcion,
+                    cliente: work.cliente,
+                    fechaEntrega: work.fechaRequerida
+                        ? work.fechaRequerida.toLocaleDateString('es-ES')
+                        : 'Sin fecha',
+                    dias: work.diasHastaEntrega ?? 'N/A',
+                    horas: Number(work.horasDedicadas.toFixed(1)),
+                    estado: work.urgency === 'URGENTE' ? 'URGENTE' : 'NO URGENTE'
+                });
+            });
+        });
+
+        [summarySheet, detailSheet].forEach((sheet) => {
+            sheet.getRow(1).font = { bold: true };
+            sheet.views = [{ state: 'frozen', ySplit: 1 }];
+        });
+
+        const buffer = await workbook.xlsx.writeBuffer();
+        const blob = new Blob([buffer], {
+            type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        });
+
+        const fileName = `datos_prioridades_${new Date().toISOString().slice(0, 10)}.xlsx`;
+        saveAs(blob, fileName);
+    } catch (error) {
+        logError('Error exportando Excel de prioridades:', error);
+        throw error;
+    }
 }

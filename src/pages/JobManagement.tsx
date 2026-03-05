@@ -19,7 +19,7 @@ import { parseLocalDateTime } from '../utils/localDate';
 import { useImproductiveReport } from '../hooks/useImproductiveReport';
 import { generateImproductivosExcel } from '../services/excelGenerator';
 import SmartDateInput from '../components/shared/SmartDateInput';
-import { logError, logWarning } from '../utils/logger';
+import { logError, logInfo, logWarning } from '../utils/logger';
 
 
 
@@ -1092,7 +1092,9 @@ export const JobManagement: React.FC<JobManagementProps> = ({
             return;
         }
 
-        console.log(`✅ Trabajos cargados: ${Object.keys(allJobs).length} empleados`);
+        logInfo(`Trabajos cargados: ${Object.keys(allJobs).length} empleados`, {
+            source: 'JobManagement.runPriorityAnalysisInternal'
+        });
 
         // 2. Analizar trabajos vs prioridades
         const analysisDate = new Date(analysisEndDate);
@@ -1109,7 +1111,9 @@ export const JobManagement: React.FC<JobManagementProps> = ({
         );
         const globalStats = calculateGlobalStats(employeeAnalysis);
 
-        console.log(`✅ Análisis completado: ${employeeAnalysis.length} empleados con datos`);
+        logInfo(`Analisis completado: ${employeeAnalysis.length} empleados con datos`, {
+            source: 'JobManagement.runPriorityAnalysisInternal'
+        });
 
         // 🔍 DIAGNÓSTICO: Si el resultado está vacío, mostrar info de debugging
         if (employeeAnalysis.length === 0 || globalStats.totalArticulos === 0) {

@@ -96,6 +96,7 @@ interface SettingsProps {
 }
 
 const Settings: React.FC<SettingsProps> = ({ companyHolidays, setCompanyHolidays }) => {
+    const isProd = import.meta.env.PROD;
     const [settings, setSettings] = useState<SettingsState>(() => {
         const saved = localStorage.getItem('appSettings');
         return saved ? JSON.parse(saved) : DEFAULT_SETTINGS;
@@ -163,18 +164,33 @@ const Settings: React.FC<SettingsProps> = ({ companyHolidays, setCompanyHolidays
 
     // Server Config Handlers
     const handleSaveApiUrl = () => {
+        if (isProd) {
+            setSuccessMessage('La URL del API no es editable en produccion.');
+            setTimeout(() => setSuccessMessage(''), 3000);
+            return;
+        }
         setApiBaseUrl(apiUrl);
         setSuccessMessage('URL del servidor actualizada. El monitor intentará reconectar.');
         setTimeout(() => setSuccessMessage(''), 3000);
     };
 
     const handleSaveErpUsername = () => {
+        if (isProd) {
+            setSuccessMessage('El usuario ERP no es editable en produccion.');
+            setTimeout(() => setSuccessMessage(''), 3000);
+            return;
+        }
         setErpUsername(erpUsername);
         setSuccessMessage('Usuario ERP actualizado correctamente.');
         setTimeout(() => setSuccessMessage(''), 3000);
     };
 
     const handleResetApiUrl = () => {
+        if (isProd) {
+            setSuccessMessage('La URL del API no es editable en produccion.');
+            setTimeout(() => setSuccessMessage(''), 3000);
+            return;
+        }
         clearApiBaseUrl();
         setApiUrl(getApiBaseUrl());
         setSuccessMessage('URL restablecida a valores por defecto/entorno.');
@@ -218,17 +234,19 @@ const Settings: React.FC<SettingsProps> = ({ companyHolidays, setCompanyHolidays
                                 placeholder="http://10.0.0.19:8000"
                                 value={apiUrl}
                                 onChange={(e) => setApiUrl(e.target.value)}
+                                disabled={isProd}
                             />
                             <button
                                 type="button"
                                 onClick={handleSaveApiUrl}
+                                disabled={isProd}
                                 className="inline-flex items-center px-3 py-2 border border-l-0 border-slate-300 bg-slate-50 text-slate-500 hover:bg-slate-100 font-medium text-sm rounded-r-md"
                             >
                                 Guardar
                             </button>
                         </div>
                         <div className="mt-2 flex justify-between items-center">
-                            <button onClick={handleResetApiUrl} className="text-xs text-blue-600 hover:underline">Restablecer por defecto</button>
+                            <button onClick={handleResetApiUrl} disabled={isProd} className="text-xs text-blue-600 hover:underline disabled:text-slate-400 disabled:no-underline">Restablecer por defecto</button>
                             <button
                                 onClick={handleTestConnection}
                                 disabled={apiCheckResult.status === 'checking'}
@@ -255,15 +273,22 @@ const Settings: React.FC<SettingsProps> = ({ companyHolidays, setCompanyHolidays
                                 placeholder="DOMINIO\\usuario"
                                 value={erpUsername}
                                 onChange={(e) => setLocalErpUsername(e.target.value)}
+                                disabled={isProd}
                             />
                             <button
                                 type="button"
                                 onClick={handleSaveErpUsername}
+                                disabled={isProd}
                                 className="inline-flex items-center px-3 py-2 border border-l-0 border-slate-300 bg-slate-50 text-slate-500 hover:bg-slate-100 font-medium text-sm rounded-r-md"
                             >
                                 Guardar
                             </button>
                         </div>
+                        {isProd && (
+                            <p className="mt-2 text-xs text-amber-700">
+                                En produccion este valor se controla por entorno del servidor.
+                            </p>
+                        )}
                     </div>
                 </SettingsSection>
 

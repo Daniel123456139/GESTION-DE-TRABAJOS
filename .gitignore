@@ -31,6 +31,8 @@ tsc_output*.txt
 # Archivos locales
 *.local
 .env.local
+.env*.tmp
+.env*.bak
 
 # Archivos temporales
 *_temp.*

@@ -31,6 +31,26 @@ const LoadingFallback = () => (
     </div>
 );
 
+const UnauthorizedFallback: React.FC<{ onLogout: () => void | Promise<void> }> = ({ onLogout }) => (
+    <div className="flex min-h-screen w-full items-center justify-center bg-slate-50 px-4">
+        <div className="w-full max-w-lg rounded-2xl border border-amber-200 bg-white p-8 text-center shadow-sm">
+            <h1 className="text-2xl font-bold text-amber-700">Acceso no autorizado</h1>
+            <p className="mt-3 text-sm text-slate-600">
+                Tu perfil no tiene permisos para acceder al portal de Gestion de Trabajos.
+            </p>
+            <button
+                type="button"
+                onClick={() => {
+                    void onLogout();
+                }}
+                className="mt-6 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700"
+            >
+                Cerrar sesion
+            </button>
+        </div>
+    </div>
+);
+
 export interface AuthContextType {
     user: User | null;
     login: (user: User) => void;
@@ -51,6 +71,8 @@ const MainRoutes: React.FC = () => {
     const queryClient = useQueryClient();
     const [currentUser, setCurrentUser] = useState<User | null>(null);
     const [loading, setLoading] = useState(true);
+    const canAccessHrPortal = currentUser?.role === Role.HR || currentUser?.role === Role.Management;
+    const authenticatedLandingPath = canAccessHrPortal ? '/gestion-trabajos' : '/no-autorizado';
 
     // Global Filter State
     const [globalFilterState, setGlobalFilterState] = useState<{
@@ -129,13 +151,10 @@ const MainRoutes: React.FC = () => {
 
     // Auto-navigate from processing to portal when data is ready
     useEffect(() => {
-        if (location.pathname === '/processing' && !loadingFichajes && !loadingCalendario && erpData.length > 0) {
-            navigate('/gestion-trabajos');
+        if (location.pathname === '/processing' && !loadingFichajes && !loadingCalendario) {
+            navigate(canAccessHrPortal ? '/gestion-trabajos' : '/no-autorizado');
         }
-        if (location.pathname === '/processing' && !loadingFichajes && !loadingCalendario && erpData.length === 0 && !errorFichajes) {
-            navigate('/gestion-trabajos');
-        }
-    }, [loadingFichajes, loadingCalendario, erpData, errorFichajes, navigate]);
+    }, [loadingFichajes, loadingCalendario, canAccessHrPortal, navigate]);
 
     const handleLogin = useCallback((user: User) => {
         setCurrentUser(user);
@@ -173,20 +192,20 @@ const MainRoutes: React.FC = () => {
                         <Routes>
                             <Route
                                 path="/login"
-                                element={currentUser ? <Navigate to="/gestion-trabajos" /> : <LoginComponent onLogin={handleLogin} />}
+                                element={currentUser ? <Navigate to={authenticatedLandingPath} /> : <LoginComponent onLogin={handleLogin} />}
                             />
                             <Route
                                 path="/setup"
-                                element={currentUser ? <InitialConfigComponent onContinue={handleInitialConfigContinue} onBack={() => { }} /> : <Navigate to="/login" />}
+                                element={(currentUser && canAccessHrPortal) ? <InitialConfigComponent onContinue={handleInitialConfigContinue} onBack={() => { }} /> : <Navigate to={currentUser ? '/no-autorizado' : '/login'} />}
                             />
                             <Route
                                 path="/processing"
-                                element={currentUser ? <ProcessingComponent /> : <Navigate to="/login" />}
+                                element={(currentUser && canAccessHrPortal) ? <ProcessingComponent /> : <Navigate to={currentUser ? '/no-autorizado' : '/login'} />}
                             />
                             <Route
                                 path="/gestion-trabajos"
                                 element={
-                                    currentUser ? (
+                                    currentUser && canAccessHrPortal ? (
                                         <HrLayout
                                             shifts={shifts}
                                             setShifts={setShifts}
@@ -196,7 +215,7 @@ const MainRoutes: React.FC = () => {
                                             initialEndTime={globalFilterState?.endTime}
                                         />
                                     ) : (
-                                        <Navigate to="/login" />
+                                        <Navigate to={currentUser ? '/no-autorizado' : '/login'} />
                                     )
                                 }
                             >
@@ -204,7 +223,14 @@ const MainRoutes: React.FC = () => {
                                 <Route path="jobs" element={<HrJobsPage />} />
                                 <Route path="improductivos" element={<ImproductiveDashboards />} />
                             </Route>
-                            <Route path="*" element={<Navigate to="/gestion-trabajos" />} />
+                            <Route
+                                path="/no-autorizado"
+                                element={currentUser ? <UnauthorizedFallback onLogout={handleLogout} /> : <Navigate to="/login" />}
+                            />
+                            <Route
+                                path="*"
+                                element={currentUser ? <Navigate to={authenticatedLandingPath} /> : <Navigate to="/login" />}
+                            />
                         </Routes>
                     </React.Suspense>
                 )}

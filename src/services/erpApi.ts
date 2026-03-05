@@ -1,5 +1,6 @@
 
 import { getApiBaseUrl } from '../config/apiConfig';
+import { getCurrentFirebaseToken } from './firebaseAuthService';
 import { logError, logWarning } from '../utils/logger';
 
 export interface MotivoAusencia {
@@ -32,6 +33,21 @@ export interface Operario {
     Flexible: boolean;
 }
 
+const shouldAttachProxyToken = (url: string): boolean => {
+    if (!url) return false;
+    if (url.startsWith('/api/erp')) return true;
+    try {
+        const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost';
+        const parsed = new URL(url, origin);
+        if (typeof window !== 'undefined' && parsed.origin !== window.location.origin) {
+            return false;
+        }
+        return parsed.pathname.startsWith('/api/erp');
+    } catch {
+        return false;
+    }
+};
+
 const fetchWithTimeout = async (
     url: string,
     options: RequestInit = {},
@@ -52,8 +68,17 @@ const fetchWithTimeout = async (
     }
 
     try {
+        const headers = new Headers(options.headers || {});
+        if (shouldAttachProxyToken(url) && options.mode !== 'no-cors') {
+            const token = await getCurrentFirebaseToken();
+            if (token && !headers.has('Authorization')) {
+                headers.set('Authorization', `Bearer ${token}`);
+            }
+        }
+
         const response = await fetch(url, {
             ...options,
+            headers,
             signal: controller.signal
         });
         clearTimeout(id);

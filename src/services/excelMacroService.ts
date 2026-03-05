@@ -12,8 +12,40 @@
  *    - Replica agrupaciones VBA: CORTE(LAS/AUT/PUN), PRENSAS(PRE/INS), PLEGADORA(ROB/PLE).
  */
 
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 import { PriorityArticle } from '../types';
+
+const MAX_EXCEL_SIZE_BYTES = 8 * 1024 * 1024;
+const ALLOWED_EXCEL_EXTENSIONS = ['.xlsx', '.xlsm'];
+
+export interface MacroSheet {
+    rows: any[][];
+    dateColumns: number[];
+    columnWidths: number[];
+}
+
+export interface MacroWorkbook {
+    SheetNames: string[];
+    Sheets: Record<string, MacroSheet>;
+}
+
+function validateWorkbookInputFile(file: File): void {
+    if (!file) throw new Error('No se ha proporcionado ningun archivo.');
+
+    const fileName = file.name.toLowerCase();
+    const hasAllowedExtension = ALLOWED_EXCEL_EXTENSIONS.some((ext) => fileName.endsWith(ext));
+    if (!hasAllowedExtension) {
+        throw new Error('Formato no permitido. Solo se admiten .xlsx o .xlsm.');
+    }
+
+    if (file.size <= 0) {
+        throw new Error('El archivo esta vacio.');
+    }
+
+    if (file.size > MAX_EXCEL_SIZE_BYTES) {
+        throw new Error('El archivo excede el tamano maximo permitido (8 MB).');
+    }
+}
 
 interface SourceRow {
     colA: string;
@@ -41,15 +73,65 @@ const SECTION_GROUPS = new Map<string, Set<string>>([
     ['PLEGADORA', new Set(['ROB', 'PLE'])]
 ]);
 
-function cellVal(ws: XLSX.WorkSheet, row: number, col: number): any {
-    const addr = XLSX.utils.encode_cell({ r: row, c: col });
-    const cell = ws[addr];
-    return cell ? cell.v : null;
+function normalizeExcelCellValue(value: ExcelJS.CellValue | null | undefined): any {
+    if (value === null || value === undefined) return null;
+    if (value instanceof Date) return value;
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
+
+    if (typeof value === 'object') {
+        if ('result' in value) return normalizeExcelCellValue(value.result as ExcelJS.CellValue);
+        if ('text' in value && typeof value.text === 'string') return value.text;
+        if ('richText' in value && Array.isArray(value.richText)) {
+            return value.richText.map((part) => part.text || '').join('');
+        }
+        if ('hyperlink' in value && typeof value.hyperlink === 'string') {
+            return value.text || value.hyperlink;
+        }
+        if ('formula' in value) return null;
+        if ('error' in value) return null;
+    }
+
+    return String(value);
+}
+
+function worksheetToRows(worksheet: ExcelJS.Worksheet): any[][] {
+    const rows: any[][] = [];
+    const maxRow = worksheet.rowCount;
+
+    for (let r = 1; r <= maxRow; r++) {
+        const row = worksheet.getRow(r);
+        const values: any[] = [];
+        for (let c = 1; c <= row.cellCount; c++) {
+            values.push(normalizeExcelCellValue(row.getCell(c).value));
+        }
+        rows.push(values);
+    }
+
+    return rows;
+}
+
+function cellVal(ws: MacroSheet, row: number, col: number): any {
+    return ws.rows[row]?.[col] ?? null;
 }
 
 function normalizeText(value: any): string {
     if (value === null || value === undefined) return '';
     return String(value).trim();
+}
+
+function excelSerialToDate(serial: number): Date | null {
+    if (!Number.isFinite(serial)) return null;
+    const excelEpoch = Date.UTC(1899, 11, 30);
+    const utc = new Date(excelEpoch + (serial * 86400000));
+    if (isNaN(utc.getTime())) return null;
+    return new Date(
+        utc.getUTCFullYear(),
+        utc.getUTCMonth(),
+        utc.getUTCDate(),
+        utc.getUTCHours(),
+        utc.getUTCMinutes(),
+        utc.getUTCSeconds()
+    );
 }
 
 function parseDate(value: any): Date | null {
@@ -60,9 +142,7 @@ function parseDate(value: any): Date | null {
     }
 
     if (typeof value === 'number') {
-        const parsed = XLSX.SSF.parse_date_code(value);
-        if (!parsed || !parsed.y || !parsed.m || !parsed.d) return null;
-        return new Date(parsed.y, parsed.m - 1, parsed.d);
+        return excelSerialToDate(value);
     }
 
     if (typeof value === 'string') {
@@ -111,7 +191,7 @@ function splitCommaValues(value: string): string[] {
     if (!value) return [];
     return value
         .split(',')
-        .map(part => part.trim())
+        .map((part) => part.trim())
         .filter(Boolean);
 }
 
@@ -140,44 +220,37 @@ function computeColumnWidths(data: any[][]): Array<{ wch: number }> {
     return widths;
 }
 
-function applySheetLayout(ws: XLSX.WorkSheet, data: any[][], dateColumns: number[]): void {
+function applySheetLayout(sheet: MacroSheet, data: any[][], dateColumns: number[]): void {
     if (!data.length) return;
 
-    const maxCols = data.reduce((max, row) => Math.max(max, row.length), 0);
-    if (maxCols === 0) return;
-
-    ws['!cols'] = computeColumnWidths(data);
-    ws['!autofilter'] = { ref: `A1:${XLSX.utils.encode_col(maxCols - 1)}1` };
-    ws['!freeze'] = { xSplit: 0, ySplit: 1, topLeftCell: 'A2', activePane: 'bottomLeft', state: 'frozen' };
+    sheet.columnWidths = computeColumnWidths(data).map((col) => col.wch);
+    sheet.dateColumns = [...dateColumns];
 
     for (let r = 1; r < data.length; r++) {
         for (const dateCol of dateColumns) {
             const dateValue = parseDate(data[r][dateCol]);
-            if (!dateValue) continue;
-
-            const addr = XLSX.utils.encode_cell({ r, c: dateCol });
-            const existing = ws[addr] || {};
-            ws[addr] = {
-                ...existing,
-                t: 'd',
-                v: dateValue,
-                z: 'dd/mm/yyyy'
-            };
+            if (dateValue) data[r][dateCol] = dateValue;
         }
     }
 }
 
-function upsertSheet(wb: XLSX.WorkBook, name: string, data: any[][], dateColumns: number[]): void {
+function upsertSheet(wb: MacroWorkbook, name: string, data: any[][], dateColumns: number[]): void {
     const safeName = sanitizeSheetName(name);
 
     if (wb.Sheets[safeName]) {
         delete wb.Sheets[safeName];
-        wb.SheetNames = wb.SheetNames.filter(sheetName => sheetName !== safeName);
+        wb.SheetNames = wb.SheetNames.filter((sheetName) => sheetName !== safeName);
     }
 
-    const ws = XLSX.utils.aoa_to_sheet(data);
-    applySheetLayout(ws, data, dateColumns);
-    XLSX.utils.book_append_sheet(wb, ws, safeName);
+    const rows = data.map((row) => [...row]);
+    const sheet: MacroSheet = {
+        rows,
+        dateColumns: [],
+        columnWidths: []
+    };
+    applySheetLayout(sheet, rows, dateColumns);
+    wb.Sheets[safeName] = sheet;
+    wb.SheetNames.push(safeName);
 }
 
 function sortRowsByDate(rows: any[][]): any[][] {
@@ -192,17 +265,19 @@ function sortRowsByDate(rows: any[][]): any[][] {
     });
 }
 
-function runMacroAnalisisInicial(wb: XLSX.WorkBook): void {
+function runMacroAnalisisInicial(wb: MacroWorkbook): void {
     const firstSheetName = wb.SheetNames[0];
     const wsOriginal = wb.Sheets[firstSheetName];
 
-    if (!wsOriginal) {
+    if (!wsOriginal || !wsOriginal.rows.length) {
         throw new Error('El archivo no contiene hoja de origen para ejecutar macros.');
     }
 
-    const range = XLSX.utils.decode_range(wsOriginal['!ref'] || 'A1');
-    const totalRows = range.e.r + 1;
-    const totalCols = range.e.c + 1;
+    const totalRows = wsOriginal.rows.length;
+    const totalCols = wsOriginal.rows.reduce((max, row) => Math.max(max, row.length), 0);
+    if (totalCols === 0) {
+        throw new Error('La hoja de origen no contiene columnas validas.');
+    }
 
     const headers = Array.from({ length: totalCols }, (_, c) => cellVal(wsOriginal, 0, c) ?? '');
 
@@ -216,7 +291,6 @@ function runMacroAnalisisInicial(wb: XLSX.WorkBook): void {
         });
     }
 
-    // 1) Identificacion de relaciones padre/hijo y fecha del padre
     const childToParent = new Map<string, string>();
     const parentDates = new Map<string, Date>();
 
@@ -242,7 +316,6 @@ function runMacroAnalisisInicial(wb: XLSX.WorkBook): void {
         }
     }
 
-    // 2) Agregacion principal (equivalente a AGRUPACION ARTICULOS)
     const aggregates = new Map<string, ArticleAggregate>();
     const articleOrder: string[] = [];
     const launchedOrdersSeen = new Set<string>();
@@ -345,7 +418,6 @@ function runMacroAnalisisInicial(wb: XLSX.WorkBook): void {
         agrupacionRows.push(outRow);
     }
 
-    // 3) Regla "no fabricar" por cobertura del padre
     const noFabricar = new Set<string>();
     const reviewedParents = new Set<string>();
 
@@ -380,8 +452,7 @@ function runMacroAnalisisInicial(wb: XLSX.WorkBook): void {
         i = groupEnd;
     }
 
-    // 4) HOJA FABRICA: Pendiente > Stock y no marcado en noFabricar
-    const fabricaRows = agrupacionRows.filter(row => {
+    const fabricaRows = agrupacionRows.filter((row) => {
         const articulo = normalizeText(row[1]);
         if (!articulo) return false;
 
@@ -390,7 +461,6 @@ function runMacroAnalisisInicial(wb: XLSX.WorkBook): void {
         return pendiente > stock && !noFabricar.has(articulo);
     });
 
-    // 5) HOJA FINAL: mapeo de columnas B,C,D,H,F,G,I,J -> A..H
     const pickHeader = (index: number, fallback: string) => normalizeText(headers[index]) || fallback;
 
     const hojaFinalHeaders = [
@@ -404,7 +474,7 @@ function runMacroAnalisisInicial(wb: XLSX.WorkBook): void {
         pickHeader(9, 'NOrden')
     ];
 
-    const hojaFinalRows = fabricaRows.map(row => ([
+    const hojaFinalRows = fabricaRows.map((row) => ([
         normalizeText(row[1]),
         normalizeText(row[2]),
         parseDate(row[3]) || row[3] || '',
@@ -420,15 +490,11 @@ function runMacroAnalisisInicial(wb: XLSX.WorkBook): void {
     upsertSheet(wb, 'HOJA FINAL', [hojaFinalHeaders, ...hojaFinalRows], [2]);
 }
 
-function runMacroSecciones(wb: XLSX.WorkBook): void {
+function runMacroSecciones(wb: MacroWorkbook): void {
     const wsFinal = wb.Sheets['HOJA FINAL'];
     if (!wsFinal) return;
 
-    const finalData = XLSX.utils.sheet_to_json(wsFinal, {
-        header: 1,
-        raw: true,
-        defval: ''
-    }) as any[][];
+    const finalData = wsFinal.rows.map((row) => [...row]);
 
     if (finalData.length <= 1) {
         const defaultHeaders = ['Articulo', 'Desc. Articulo', 'Fecha Entrega', 'C.Pendiente', 'C.Lanzada', 'Stock', 'CFases', 'NOrden'];
@@ -442,7 +508,7 @@ function runMacroSecciones(wb: XLSX.WorkBook): void {
     const headers = [...(finalData[0] || [])].slice(0, 8);
     while (headers.length < 8) headers.push('');
 
-    const rows = finalData.slice(1).map(row => {
+    const rows = finalData.slice(1).map((row) => {
         const normalized = [...row].slice(0, 8);
         while (normalized.length < 8) normalized.push('');
         return normalized;
@@ -463,7 +529,7 @@ function runMacroSecciones(wb: XLSX.WorkBook): void {
             return;
         }
 
-        const tokens = splitCommaValues(sectionText).map(token => token.toUpperCase());
+        const tokens = splitCommaValues(sectionText).map((token) => token.toUpperCase());
         if (!tokens.length) {
             sinSeccionRows.push(row);
             return;
@@ -499,66 +565,64 @@ function runMacroSecciones(wb: XLSX.WorkBook): void {
 
     for (const groupName of SECTION_GROUPS.keys()) {
         const indexes = sectionRowIndexes.get(groupName) || new Set<number>();
-        const sectionRows = Array.from(indexes).map(index => rows[index]);
+        const sectionRows = Array.from(indexes).map((index) => rows[index]);
         upsertSheet(wb, groupName, [headers, ...sortRowsByDate(sectionRows)], [2]);
     }
 
     for (const dynamicSection of dynamicSectionOrder) {
         const indexes = sectionRowIndexes.get(dynamicSection);
         if (!indexes || indexes.size === 0) continue;
-        const sectionRows = Array.from(indexes).map(index => rows[index]);
+        const sectionRows = Array.from(indexes).map((index) => rows[index]);
         upsertSheet(wb, dynamicSection, [headers, ...sortRowsByDate(sectionRows)], [2]);
     }
 }
 
-export async function applyMacrosToWorkbook(file: File): Promise<XLSX.WorkBook> {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
+export async function applyMacrosToWorkbook(file: File): Promise<MacroWorkbook> {
+    validateWorkbookInputFile(file);
 
-        reader.onload = (event) => {
-            try {
-                const bytes = new Uint8Array(event.target?.result as ArrayBuffer);
-                const inputWb = XLSX.read(bytes, { type: 'array', cellDates: false });
+    try {
+        const buffer = await file.arrayBuffer();
+        const inputWorkbook = new ExcelJS.Workbook();
+        await inputWorkbook.xlsx.load(buffer);
 
-                if (!inputWb.SheetNames.length) {
-                    throw new Error('El archivo no contiene hojas.');
+        const firstSheet = inputWorkbook.worksheets[0];
+        if (!firstSheet) {
+            throw new Error('El archivo no contiene hojas.');
+        }
+
+        const firstSheetName = sanitizeSheetName(firstSheet.name || 'ORIGEN');
+        const firstRows = worksheetToRows(firstSheet);
+        const firstSheetWidths = computeColumnWidths(firstRows).map((col) => col.wch);
+
+        const wb: MacroWorkbook = {
+            SheetNames: [firstSheetName],
+            Sheets: {
+                [firstSheetName]: {
+                    rows: firstRows,
+                    dateColumns: [],
+                    columnWidths: firstSheetWidths
                 }
-
-                // REQUISITO CLAVE: siempre usar la primera hoja del libro, tenga el nombre que tenga.
-                const firstSheetName = inputWb.SheetNames[0];
-                const firstSheet = inputWb.Sheets[firstSheetName];
-
-                if (!firstSheet) {
-                    throw new Error('No se pudo leer la primera hoja del archivo.');
-                }
-
-                const wb = XLSX.utils.book_new();
-                XLSX.utils.book_append_sheet(wb, firstSheet, firstSheetName);
-
-                runMacroAnalisisInicial(wb);
-                runMacroSecciones(wb);
-
-                resolve(wb);
-            } catch (error) {
-                reject(new Error(`Error procesando macros: ${(error as Error).message}`));
             }
         };
 
-        reader.onerror = () => reject(new Error('Error al leer el archivo Excel.'));
-        reader.readAsArrayBuffer(file);
-    });
+        runMacroAnalisisInicial(wb);
+        runMacroSecciones(wb);
+
+        return wb;
+    } catch (error) {
+        throw new Error(`Error procesando macros: ${(error as Error).message}`);
+    }
 }
 
-export function extractHojaFinalFromWorkbook(wb: XLSX.WorkBook): PriorityArticle[] {
+export function extractHojaFinalFromWorkbook(wb: MacroWorkbook): PriorityArticle[] {
     const ws = wb.Sheets['HOJA FINAL'];
     if (!ws) {
         throw new Error('El workbook no contiene la hoja "HOJA FINAL".');
     }
 
-    const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
     const articles: PriorityArticle[] = [];
 
-    for (let rowNum = 1; rowNum <= range.e.r; rowNum++) {
+    for (let rowNum = 1; rowNum < ws.rows.length; rowNum++) {
         const articulo = normalizeText(cellVal(ws, rowNum, 0));
         if (!articulo) continue;
 
